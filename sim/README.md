@@ -20,10 +20,11 @@ sim/
 │   ├── dynamics_model.md    # 动力学模型说明
 │   └── verification.md      # 验证标准与用例
 ├── matlab/                  # MATLAB 脚本与函数
-│   ├── models/              # 动力学/推进器/云台模型
-│   ├── controllers/         # 控制器实现
-│   ├── utils/               # 工具函数
-│   └── scripts/             # 运行脚本、参数配置
+│   ├── init_path.m          # 路径初始化
+│   ├── models/              # 动力学/推进器模型（rigid_body_ode、thrust_model）
+│   ├── controllers/         # 姿态/位置控制器
+│   ├── utils/               # 四元数、thrust_dir_to_att、animate_drone
+│   └── scripts/             # params、run_basic_sim、run_verify_hover
 ├── simulink/                # Simulink 模型
 │   ├── models/              # .slx 模型文件
 │   └── lib/                 # 可复用库模块
@@ -53,7 +54,8 @@ sim/
    run_basic_sim
    ```
 3. 将显示：时域曲线、3D 轨迹、姿态动画
-4. 仿真结果可保存至 `data/results/`（在脚本中取消注释保存代码）
+4. 悬停验证：`run_verify_hover` 运行定点悬停 / 水平平移验证用例
+5. 仿真结果可保存至 `data/results/`（在脚本中取消注释保存代码）
 
 ## 相关文档
 

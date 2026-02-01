@@ -61,8 +61,8 @@ for i = 1:length(idx)
             [0.3 0.6 0.9], 'FaceAlpha', 0.7, 'EdgeColor', 'k');
     end
 
-    % 推力方向箭头（从机体中心向下）
-    thrust_dir = R * [0; 0; -1];  % 惯性系
+    % 推力方向箭头（推力方向，惯性系向上）
+    thrust_dir = R * [0; 0; 1];  % 机体系 +Z，惯性系
     arrow_len = 0.2;
     arrow_end = pos(:,k) + arrow_len * thrust_dir;
     h_thrust = plot3([pos(1,k), arrow_end(1)], [pos(2,k), arrow_end(2)], [pos(3,k), arrow_end(3)], ...

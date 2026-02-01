@@ -12,15 +12,15 @@ addpath(fullfile(sim_root, 'utils'));
 %% 加载参数
 run(fullfile(sim_root, 'scripts', 'params.m'));
 
-%% 初始状态
+%% 初始状态与期望
 % 状态: [px; py; pz; vx; vy; vz; qw; qx; qy; qz; omx; omy; omz]
-% 初始位置 (0,0,5m)，小幅俯仰扰动以观察稳定
+pos_des = [0; 0; 5];   % 期望位置（定点悬停）
+vel_des = [0; 0; 0];
 roll0 = deg2rad(5);
 pitch0 = deg2rad(5);
 yaw0 = 0;
 q0 = euler2quat(roll0, pitch0, yaw0);
 q0 = quat_normalize(q0);
-
 x0 = [0; 0; 5; 0; 0; 0; q0; 0; 0; 0];
 
 %% 仿真
@@ -31,17 +31,20 @@ N = length(t);
 
 X = zeros(13, N);
 U = zeros(3, N);
-att_des = [0; 0; 0];  % 期望水平
 
 X(:,1) = x0;
-ctrl_state = struct('att_int', zeros(3,1), 'rate_int', zeros(3,1));
+pos_state = struct('pos_int', zeros(3,1));
+att_state = struct('att_int', zeros(3,1), 'rate_int', zeros(3,1));
 
 for k = 1:N-1
     x = X(:,k);
+    pos = x(1:3);
+    vel = x(4:6);
     q = x(7:10);
     omega = x(11:13);
 
-    [T, alpha, beta, ctrl_state] = attitude_controller(q, omega, att_des, ctrl_state, p);
+    [T, att_des, pos_state] = position_controller(pos, vel, pos_des, vel_des, pos_state, p);
+    [alpha, beta, att_state] = attitude_controller(q, omega, att_des, T, att_state, p);
     u = [T; alpha; beta];
     U(:,k) = u;
 
@@ -115,16 +118,39 @@ xlabel('t (s)'); ylabel('角速度 (°/s)');
 title('角速度');
 grid on;
 
-%% 绘图 2: 3D 轨迹
-figure('Name', 'DroneX 仿真 - 3D 轨迹', 'Position', [100 100 700 600]);
+%% 绘图 2: 3D 轨迹 + 俯视
+figure('Name', 'DroneX 仿真 - 3D 轨迹', 'Position', [100 100 900 500]);
+
+subplot(1,2,1);
 plot3(pos(1,:), pos(2,:), pos(3,:), 'b-', 'LineWidth', 1.5);
 hold on;
 plot3(pos(1,1), pos(2,1), pos(3,1), 'go', 'MarkerSize', 10, 'MarkerFaceColor', 'g');
 plot3(pos(1,end), pos(2,end), pos(3,end), 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'r');
 xlabel('x (m)'); ylabel('y (m)'); zlabel('z (m)');
 title('3D 轨迹 (绿:起点 红:终点)');
+grid on;
+% 设置坐标轴范围，确保 x/y/z 均有可见跨度
+min_span = 1.0;
+cx = (max(pos(1,:)) + min(pos(1,:))) / 2;
+cy = (max(pos(2,:)) + min(pos(2,:))) / 2;
+cz = (max(pos(3,:)) + min(pos(3,:))) / 2;
+sx = max(min_span, max(pos(1,:)) - min(pos(1,:)) + 0.1);
+sy = max(min_span, max(pos(2,:)) - min(pos(2,:)) + 0.1);
+sz = max(min_span, max(pos(3,:)) - min(pos(3,:)) + 0.1);
+xlim([cx - sx/2, cx + sx/2]);
+ylim([cy - sy/2, cy + sy/2]);
+zlim([cz - sz/2, cz + sz/2]);
+axis equal;
+view(45, 25);
+
+subplot(1,2,2);
+plot(pos(1,:), pos(2,:), 'b-', 'LineWidth', 1.5);
+hold on;
+plot(pos(1,1), pos(2,1), 'go', 'MarkerSize', 10, 'MarkerFaceColor', 'g');
+plot(pos(1,end), pos(2,end), 'ro', 'MarkerSize', 10, 'MarkerFaceColor', 'r');
+xlabel('x (m)'); ylabel('y (m)');
+title('俯视图 (x-y)');
 grid on; axis equal;
-view(45, 30);
 
 %% 绘图 3: 3D 动画
 animate_drone(pos, q_hist, t, p);
@@ -132,3 +158,5 @@ animate_drone(pos, q_hist, t, p);
 %% 保存结果（可选）
 % save(fullfile(sim_root, '..', 'data', 'results', 'sim_basic_result.mat'), 't', 'X', 'U', 'p');
 fprintf('仿真完成。时长 %.1f s，步数 %d。\n', t_end, N);
+fprintf('位置范围: x[%.2f, %.2f] y[%.2f, %.2f] z[%.2f, %.2f] m\n', ...
+    min(pos(1,:)), max(pos(1,:)), min(pos(2,:)), max(pos(2,:)), min(pos(3,:)), max(pos(3,:)));

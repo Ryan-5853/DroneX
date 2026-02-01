@@ -149,6 +149,14 @@ flowchart LR
 
 **工具链**：MATLAB（含 Simulink）
 
+**已实现**（MATLAB 脚本）：
+
+- 刚体动力学（rigid_body_ode）、推力模型（thrust_model）
+- 姿态控制器、位置控制器（attitude_controller、position_controller）
+- 工具函数：四元数/欧拉角、thrust_dir_to_att、animate_drone
+- 运行脚本：run_basic_sim、run_verify_hover（定点悬停、水平平移验证）
+- 参数配置：params.m
+
 **内容**：
 
 - 刚体动力学仿真（MATLAB/Simulink）
@@ -159,11 +167,11 @@ flowchart LR
 
 **输出**：验证过的控制参数、轨迹规划结果。
 
-### 5.2 下位机/驱动子系统 (`/firmware` 或 `/embedded`)
+### 5.2 下位机/驱动子系统 (`/firmware`)
 
 **目标**：基于 HAL 库从零编写飞控固件与外围驱动。
 
-**硬件平台**：STM32H743
+**硬件平台**：STM32H743，工程位于 `firmware/DroneX_STM32H743_Firmware/`（CubeMX + Keil MDK-ARM）
 
 **内容**：
 
@@ -176,17 +184,25 @@ flowchart LR
 
 **输出**：可烧录固件、驱动库、参数配置工具。
 
-### 5.3 机械设计子系统 (`/mechanical` 或 `/cad`)
+### 5.3 机械设计子系统 (`/mechanical`)
 
 **目标**：机架、云台、推进单元的结构与装配设计。
 
-**加工方式**：以 3D 打印为主，需要时采用 CNC 加工
+**加工方式**：以 3D 打印为主，需要时采用 CNC 加工。
+
+**已确认设计决策**（详见 mechanical/docs/DESIGN_PLAN.md）：
+
+- **整机重量**：≤ 1 kg
+- **机架**：管架为主，火箭外形、细长、底部起落架
+- **推进单元**：现成共轴产品
+- **云台驱动**：减速电机直驱
+- **桨罩**：暂不定
 
 **内容**：
 
-- 机架：适配 3D 打印的结构设计，兼顾强度与重心/推力点位置
-- 共轴反桨单元：上下桨间距、电机安装、桨罩
-- 二轴云台：俯仰轴 + 滚转轴，电机选型与减速比
+- 机架：管架结构，兼顾强度与重心/推力点位置
+- 共轴反桨单元：现成产品，到货后补充规格与安装接口
+- 二轴云台：俯仰 + 滚转，减速电机直驱，机械与软件限位
 - 电池/载荷布局，保证重心在推力点之上
 - 图纸、BOM、3D 打印 STL/STEP 文件，需 CNC 时的加工图
 
@@ -221,9 +237,9 @@ flowchart LR
 
 ## 七、后续细化方向
 
-1. **动力学与建模**：补充坐标系约定、云台角定义、参数表
-2. **仿真计划**：MATLAB/Simulink 项目结构、仿真流程、验证标准
-3. **下位机计划**：软件架构、任务调度、通信协议
-4. **机械设计计划**：材料选型、关键尺寸约束
-5. **控制算法计划**：控制结构图、调参流程、鲁棒性设计
-6. **风险与应对**：技术风险清单、替代方案
+1. **动力学与建模**：坐标系约定见 sim/docs/dynamics_model.md，参数表已与 params.m 对齐
+2. **仿真计划**：详见 sim/docs/SIMULATION_PLAN.md，MATLAB 脚本已实现基础闭环
+3. **下位机计划**：详见 firmware/docs/FLIGHT_CONTROL_DESIGN.md
+4. **机械设计计划**：详见 mechanical/docs/DESIGN_PLAN.md，已确认管架、共轴产品、减速电机直驱
+5. **控制算法计划**：控制结构已实现于 sim/matlab/controllers/，调参流程与鲁棒性待细化
+6. **风险与应对**：技术风险清单待补充

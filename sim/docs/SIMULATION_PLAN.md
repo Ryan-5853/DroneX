@@ -106,10 +106,11 @@ flowchart TB
 | 路径                     | 职责                             |
 | ------------------------ | -------------------------------- |
 | `sim/docs/`              | 仿真文档（本计划、动力学、验证） |
-| `sim/matlab/models/`     | 动力学、推进器、云台等 M 函数    |
-| `sim/matlab/controllers/`| 控制器 M 函数或封装              |
-| `sim/matlab/utils/`      | 坐标变换、绘图等工具函数         |
-| `sim/matlab/scripts/`    | 运行脚本、参数配置、批量仿真     |
+| `sim/matlab/init_path.m` | 路径初始化（添加 models、controllers、utils、scripts） |
+| `sim/matlab/models/`     | 动力学、推进器、云台等 M 函数（rigid_body_ode、thrust_model） |
+| `sim/matlab/controllers/`| 姿态控制器、位置控制器           |
+| `sim/matlab/utils/`      | 四元数/欧拉角、thrust_dir_to_att、animate_drone |
+| `sim/matlab/scripts/`    | params、run_basic_sim、run_verify_hover |
 | `sim/simulink/models/`   | 主仿真 .slx 模型                 |
 | `sim/simulink/lib/`      | 可复用 Simulink 库块             |
 | `sim/data/results/`      | 仿真输出、日志、绘图             |
