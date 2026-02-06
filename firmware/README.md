@@ -37,7 +37,7 @@ firmware/
 | 主控       | STM32H743                |
 | IMU        | MPU6050 或 BMI088        |
 | 电调       | BLHeli 或 ESC32          |
-| 云台电机   | 无刷减速电机，FOC 或 PWM |
+| 云台舵机   | 高端无刷舵机，PWM / SBUS 等舵机协议 |
 
 ## 开发阶段
 
@@ -52,4 +52,4 @@ firmware/
 - [项目主计划](../docs/PLAN.md) — DroneX 总体规划、系统架构
 - [动力学模型](../sim/docs/dynamics_model.md) — 坐标系、运动方程
 - [飞行控制文献](../docs/literature/04-flight-control-and-estimation.md) — 姿态控制、状态估计
-- [机械设计计划](../mechanical/docs/DESIGN_PLAN.md) — 云台电机选型、限位
+- [机械设计计划](../mechanical/docs/DESIGN_PLAN.md) — 云台舵机选型、限位

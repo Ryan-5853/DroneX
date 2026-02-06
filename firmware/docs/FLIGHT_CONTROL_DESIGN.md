@@ -13,7 +13,7 @@
 | **控制周期**   | 200–500 Hz（内环 500 Hz，外环 100–200 Hz） |
 | **IMU**        | MPU6050 或 BMI088            |
 | **电调**       | BLHeli 或 ESC32              |
-| **云台电机**   | 无刷减速电机，FOC 或 PWM 驱动 |
+| **云台舵机**   | 高端无刷舵机，PWM / SBUS 等舵机协议 |
 | **姿态估计**   | 互补滤波（首版）或 EKF（后续） |
 
 ---
@@ -31,7 +31,7 @@
 - 飞控主控：STM32H743 + CubeMX/HAL，实时控制循环
 - IMU：姿态估计（互补滤波或 EKF）
 - 电调：主推进电机转速控制
-- 云台电机：无刷减速电机驱动
+- 云台舵机：高端无刷舵机（PWM/SBUS 等，驱动与校准简单）
 - 通信：遥控接收、串口/无线遥测
 - 安全逻辑：低电压保护、失控保护、急停
 
@@ -40,7 +40,7 @@
 | 交付物         | 说明                           |
 | -------------- | ------------------------------ |
 | 可烧录固件     | 可手动操控的固件（油门、云台） |
-| 驱动库         | IMU、ESC、云台电机等驱动模块   |
+| 驱动库         | IMU、ESC、云台舵机等驱动模块   |
 | 参数配置工具   | 串口/地面站调参（可选）        |
 
 ---
@@ -55,7 +55,7 @@ flowchart LR
         FC[飞控主控]
         IMU[IMU]
         ESC[电调]
-        GimbalMotor[云台电机驱动]
+        GimbalMotor[云台舵机驱动]
     end
     
     subgraph sw [软件/控制]
@@ -95,10 +95,10 @@ flowchart LR
 | BLHeli   | PWM / OneShot  | 通用，易采购             |
 | ESC32    | UART/串口协议  | 闭环转速，可扩展         |
 
-### 2.5 云台电机
+### 2.5 云台舵机
 
-- 无刷减速电机直驱（参见 [mechanical/docs/DESIGN_PLAN.md](../../mechanical/docs/DESIGN_PLAN.md) 选型）
-- 驱动方式：FOC（力矩/位置控制）或 PWM（开环/简易闭环）
+- 高端无刷舵机（参见 [mechanical/docs/DESIGN_PLAN.md](../../mechanical/docs/DESIGN_PLAN.md) 选型）
+- 驱动方式：PWM / SBUS 等舵机协议，飞控输出脉宽或总线指令即可，无需 FOC、编码器、校准
 
 ### 2.6 通信接口
 
@@ -121,7 +121,7 @@ flowchart LR
 | 应用层     | 控制分配     | 期望力/力矩 → T + (α, β)     |
 | 驱动层     | IMU 驱动     | I2C/SPI 读写、数据解析       |
 | 驱动层     | ESC 驱动     | PWM/OneShot 输出             |
-| 驱动层     | 云台驱动     | FOC/PWM 输出、位置反馈       |
+| 驱动层     | 云台驱动     | PWM/SBUS 舵机指令输出        |
 | 驱动层     | 通信         | 遥控解析、串口遥测           |
 | 系统层     | 任务调度     | 定时器、优先级、安全逻辑     |
 
@@ -148,7 +148,7 @@ flowchart TB
     Alloc --> ESC[ESC 推力 T]
     Alloc --> Gimbal[云台角 alpha beta]
     ESC --> Motor[主推进电机]
-    Gimbal --> GimbalMotor[云台电机]
+    Gimbal --> GimbalMotor[云台舵机]
 ```
 
 数据流：IMU → 姿态估计 → 姿态/位置控制 → 控制分配 → ESC + 云台驱动。
@@ -172,10 +172,10 @@ flowchart TB
 - OneShot125/OneShot42：缩短最小脉宽，提高分辨率
 - ESC32：若采用，需实现串口协议解析
 
-### 5.3 云台电机驱动
+### 5.3 云台舵机驱动
 
-- **PWM 模式**：简易开环，脉宽映射期望角速度/位置
-- **FOC 模式**：力矩/位置闭环，需编码器或霍尔反馈
+- **PWM 舵机**：脉宽映射期望角度（如 1–2 ms 对应角度范围）
+- **SBUS 舵机**：若采用总线舵机，需解析 SBUS 协议或使用专用舵机库
 - 限位：软件限位 + 机械限位（与 [mechanical/docs/gimbal/README.md](../../mechanical/docs/gimbal/README.md) 对齐）
 
 ### 5.4 遥控接收
@@ -248,4 +248,4 @@ flowchart TB
 - [PLAN.md](../../docs/PLAN.md) §6 开发阶段 P2、P3
 - [sim/docs/dynamics_model.md](../../sim/docs/dynamics_model.md) — 坐标系、运动方程
 - [docs/literature/04-flight-control-and-estimation.md](../../docs/literature/04-flight-control-and-estimation.md) — 姿态控制、状态估计、控制分配
-- [mechanical/docs/DESIGN_PLAN.md](../../mechanical/docs/DESIGN_PLAN.md) — 云台电机选型、限位
+- [mechanical/docs/DESIGN_PLAN.md](../../mechanical/docs/DESIGN_PLAN.md) — 云台舵机选型、限位

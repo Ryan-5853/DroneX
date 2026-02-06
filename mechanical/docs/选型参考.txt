@@ -1,0 +1,10 @@
+电池：格式3S
+    3300mah 30c 21*44*141   248g
+    4000mAh 30C 23*44*141   295g
+    5300mAh 30C 29*43*136   340g
+
+推进电机：https://item.taobao.com/item.htm?from=cart&id=871597014800&mi_id=0000DVuxglba71d16oCkqEwyijJOhPg67jSnBuDad_P6VWo&skuId=5871085658307&spm=a1z0d.6639537%2F202410.item.d871597014800.4d377484IerZps&upStreamPrice=34705
+    推力最大约2kg
+    自重约128*2+支架重量约300g
+    九寸桨叶，直径约230mm=23cm
+    
