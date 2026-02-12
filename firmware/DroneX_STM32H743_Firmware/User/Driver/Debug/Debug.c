@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <string.h>
 #include <stdio.h>
+#include "main.h"  /* __disable_irq / __enable_irq via CMSIS */
 
 /* ---------------------------------------------------------------------------
  * 单条消息槽
@@ -38,6 +39,11 @@ __attribute__((weak)) uint32_t Debug_Transport_Send(const uint8_t *data, uint32_
     (void)data;
     (void)len;
     return len; /* 默认“全部接受”，避免队列堵死；实际接入硬件时改为 0 或真实发送长度 */
+}
+
+__attribute__((weak)) int Debug_Transport_IsReady(void)
+{
+    return 1; /* 默认始终就绪 */
 }
 
 /* ---------------------------------------------------------------------------
@@ -90,15 +96,16 @@ Debug_Status_t Debug_Printf(const char *fmt, ...)
         }
     }
 
+    /* 临界区：避免与 PIT 中断中的 Debug_Printf 竞态 */
+    __disable_irq();
     if (RING_FULL()) {
-        /* 丢最旧一条，腾出一格 */
         s_tail = (s_tail + 1) % DEBUG_MSG_SLOTS;
     }
-
     Debug_MsgSlot_t *slot = &s_ring[s_head];
     slot->len = (uint16_t)len;
     memcpy(slot->data, buf, len);
     s_head = (s_head + 1) % DEBUG_MSG_SLOTS;
+    __enable_irq();
 
     return (n >= (int)sizeof(buf)) ? DEBUG_ERR_TRUNC : DEBUG_OK;
 }
@@ -109,6 +116,7 @@ Debug_Status_t Debug_Printf(const char *fmt, ...)
 void Debug_Process(void)
 {
     if (RING_EMPTY()) return;
+    if (!Debug_Transport_IsReady()) return;  /* DMA 未空闲，不出队不拷贝 */
 
     Debug_MsgSlot_t *slot = &s_ring[s_tail];
     Debug_Transport_SendFn send = s_transport ? s_transport : Debug_Transport_Send;
@@ -118,4 +126,9 @@ void Debug_Process(void)
         s_tail = (s_tail + 1) % DEBUG_MSG_SLOTS;
     }
     /* 若 sent == 0 或 sent < len，保留本条，下次再试，保证不撕裂 */
+}
+
+int Debug_IsQueueEmpty(void)
+{
+    return RING_EMPTY() ? 1 : 0;
 }

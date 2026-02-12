@@ -366,11 +366,11 @@
             <Rwpi>0</Rwpi>
             <noStLib>0</noStLib>
             <RepFail>1</RepFail>
-            <useFile>0</useFile>
+            <useFile>1</useFile>
             <TextAddressRange></TextAddressRange>
             <DataAddressRange></DataAddressRange>
             <pXoBase></pXoBase>
-            <ScatterFile></ScatterFile>
+            <ScatterFile>STM32H743VITx_RAM.sct</ScatterFile>
             <IncludeLibs></IncludeLibs>
             <IncludeLibsPath></IncludeLibsPath>
             <Misc></Misc>
@@ -503,6 +503,26 @@
               <FileType>1</FileType>
               <FilePath>../Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_tim_ex.c</FilePath>
             </File>
+            <File>
+              <FileName>stm32h7xx_hal_uart.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32h7xx_hal_uart_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_uart_ex.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32h7xx_hal_spi.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi.c</FilePath>
+            </File>
+            <File>
+              <FileName>stm32h7xx_hal_spi_ex.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_hal_spi_ex.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -516,12 +536,67 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>User</GroupName>
+          <Files>
+            <File>
+              <FileName>User_main.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/User_main.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Driver/IMU</GroupName>
+          <Files>
+            <File>
+              <FileName>IMU_interface.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Driver/IMU/IMU_interface.c</FilePath>
+            </File>
+            <File>
+              <FileName>ICM42688.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Driver/IMU/ICM42688.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>User/Driver/Debug</GroupName>
           <Files>
             <File>
               <FileName>Debug.c</FileName>
               <FileType>1</FileType>
               <FilePath>../User/Driver/Debug/Debug.c</FilePath>
+            </File>
+            <File>
+              <FileName>Debug_UART.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Driver/Debug/Debug_UART.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Debug/Cmd</GroupName>
+          <Files>
+            <File>
+              <FileName>Cmd.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Debug/CMD/Cmd.c</FilePath>
+            </File>
+            <File>
+              <FileName>Cmd_handlers.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Debug/CMD/Cmd_handlers.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Application/Attitude</GroupName>
+          <Files>
+            <File>
+              <FileName>Attitude.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Application/Attitude/Attitude.c</FilePath>
             </File>
           </Files>
         </Group>

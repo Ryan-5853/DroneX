@@ -19,8 +19,18 @@ typedef struct {
     uint16_t          cs_pin;
 } ICM42688_SPI_Config_t;
 
+/** 原始数据（ADC 计数值），供调试输出 */
+typedef struct {
+    int16_t gyro[3];
+    int16_t accel[3];
+    int16_t temp;
+} ICM42688_RawData_t;
+
 /* 实现 IMU 接口的 init/read，供 IMU_Interface_Init 挂到 handle 上 */
 IMU_Status_t ICM42688_Init(IMU_Handle_t *handle);
 IMU_Status_t ICM42688_Read(IMU_Handle_t *handle, IMU_Data_t *data);
+
+/** 读取并可选返回原始数据；raw 非 NULL 时填充 */
+IMU_Status_t ICM42688_ReadWithRaw(IMU_Handle_t *handle, IMU_Data_t *data, ICM42688_RawData_t *raw);
 
 #endif /* __ICM42688_H__ */

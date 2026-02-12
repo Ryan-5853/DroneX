@@ -61,10 +61,20 @@ Debug_Status_t Debug_Printf(const char *fmt, ...);
 void Debug_Process(void);
 
 /**
+ * @brief 队列是否为空。
+ */
+int Debug_IsQueueEmpty(void);
+
+/**
  * @brief 弱符号：底层发送接口。默认空实现；在应用层或 UART 驱动中重写即可接入硬件。
  * @return 已接受的字节数（若 == len 表示本条已全部交付）；0 表示当前无法发送（非阻塞忙）。
  */
 uint32_t Debug_Transport_Send(const uint8_t *data, uint32_t len);
+
+/**
+ * @brief 弱符号：传输层是否空闲可发送。DMA 驱动重写，返回 1 表示空闲。
+ */
+int Debug_Transport_IsReady(void);
 
 /* ---------------------------------------------------------------------------
  * 使用说明：

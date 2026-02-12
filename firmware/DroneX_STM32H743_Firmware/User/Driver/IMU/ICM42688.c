@@ -87,14 +87,22 @@ IMU_Status_t ICM42688_Read(IMU_Handle_t *handle, IMU_Data_t *data)
     if (handle == NULL || handle->context == NULL || data == NULL) return IMU_ERROR;
     ICM42688_SPI_Config_t *cfg = (ICM42688_SPI_Config_t *)handle->context;
 
-    /* 从 0x1D 起连续读 26 字节：TEMP(2) + 中间(6) + GYRO(6) + 中间(6) + ACCEL(6)，对应 0x1D~0x36 */
-    uint8_t raw[26];
+    /* 从 0x1D 起连续读 14 字节：TEMP(2) + ACCEL(6) + GYRO(6)，对应 ICM42688-P 寄存器顺序 */
+    uint8_t raw[14];
     if (ICM42688_ReadBlock(cfg, ICM42688_REG_TEMP_DATA1, raw, sizeof(raw)) != IMU_OK)
         return IMU_ERROR;
 
-    /* 温度：TEMP_DATA1(高) TEMP_DATA2(低) */
+    /* 温度：TEMP_DATA1(高) TEMP_DATA0(低) */
     int16_t temp_raw = (int16_t)((raw[0] << 8) | raw[1]);
     data->temperature = (float)temp_raw * ICM42688_TEMP_SCALE + ICM42688_TEMP_OFFSET;
+
+    /* 加速度：0x1F~0x24，相对 0x1D 偏移 2（DATASHEET: TEMP->ACCEL->GYRO 顺序） */
+    int16_t ax = (int16_t)((raw[2] << 8) | raw[3]);
+    int16_t ay = (int16_t)((raw[4] << 8) | raw[5]);
+    int16_t az = (int16_t)((raw[6] << 8) | raw[7]);
+    data->accel[0] = (float)ax * ICM42688_ACCEL_SCALE;
+    data->accel[1] = (float)ay * ICM42688_ACCEL_SCALE;
+    data->accel[2] = (float)az * ICM42688_ACCEL_SCALE;
 
     /* 陀螺：0x25~0x2A，相对 0x1D 偏移 8 */
     int16_t gx = (int16_t)((raw[8] << 8) | raw[9]);
@@ -104,13 +112,44 @@ IMU_Status_t ICM42688_Read(IMU_Handle_t *handle, IMU_Data_t *data)
     data->gyro[1] = (float)gy * ICM42688_GYRO_SCALE;
     data->gyro[2] = (float)gz * ICM42688_GYRO_SCALE;
 
-    /* 加速度：0x31~0x36，相对 0x1D 偏移 20 */
-    int16_t ax = (int16_t)((raw[20] << 8) | raw[21]);
-    int16_t ay = (int16_t)((raw[22] << 8) | raw[23]);
-    int16_t az = (int16_t)((raw[24] << 8) | raw[25]);
+    return IMU_OK;
+}
+
+IMU_Status_t ICM42688_ReadWithRaw(IMU_Handle_t *handle, IMU_Data_t *data, ICM42688_RawData_t *raw)
+{
+    if (handle == NULL || handle->context == NULL || data == NULL) return IMU_ERROR;
+    ICM42688_SPI_Config_t *cfg = (ICM42688_SPI_Config_t *)handle->context;
+
+    uint8_t buf[14];
+    if (ICM42688_ReadBlock(cfg, ICM42688_REG_TEMP_DATA1, buf, sizeof(buf)) != IMU_OK)
+        return IMU_ERROR;
+
+    int16_t temp_raw = (int16_t)((buf[0] << 8) | buf[1]);
+    data->temperature = (float)temp_raw * ICM42688_TEMP_SCALE + ICM42688_TEMP_OFFSET;
+
+    int16_t ax = (int16_t)((buf[2] << 8) | buf[3]);
+    int16_t ay = (int16_t)((buf[4] << 8) | buf[5]);
+    int16_t az = (int16_t)((buf[6] << 8) | buf[7]);
     data->accel[0] = (float)ax * ICM42688_ACCEL_SCALE;
     data->accel[1] = (float)ay * ICM42688_ACCEL_SCALE;
     data->accel[2] = (float)az * ICM42688_ACCEL_SCALE;
+
+    int16_t gx = (int16_t)((buf[8] << 8) | buf[9]);
+    int16_t gy = (int16_t)((buf[10] << 8) | buf[11]);
+    int16_t gz = (int16_t)((buf[12] << 8) | buf[13]);
+    data->gyro[0] = (float)gx * ICM42688_GYRO_SCALE;
+    data->gyro[1] = (float)gy * ICM42688_GYRO_SCALE;
+    data->gyro[2] = (float)gz * ICM42688_GYRO_SCALE;
+
+    if (raw != NULL) {
+        raw->gyro[0]  = gx;
+        raw->gyro[1]  = gy;
+        raw->gyro[2]  = gz;
+        raw->accel[0] = ax;
+        raw->accel[1] = ay;
+        raw->accel[2] = az;
+        raw->temp     = temp_raw;
+    }
 
     return IMU_OK;
 }

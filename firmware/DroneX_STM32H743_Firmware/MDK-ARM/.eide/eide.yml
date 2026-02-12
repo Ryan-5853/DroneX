@@ -141,13 +141,13 @@ targets:
         - STM32H743xx
       incList:
         - ../Core/Inc
-        - ../User
         - ../Drivers/STM32H7xx_HAL_Driver/Inc
         - ../Drivers/STM32H7xx_HAL_Driver/Inc/Legacy
         - ../Drivers/CMSIS/Device/ST/STM32H7xx/Include
         - ../Drivers/CMSIS/Include
         - .cmsis/include
         - RTE/_DroneX_STM32H743_Firmware
+        - ../User
       libList: []
     excludeList:
       - <virtual_root>/Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_msp_template.c
@@ -183,7 +183,7 @@ targets:
             ro-base: ""
             rw-base: ""
             xo-base: ""
-        scatterFilePath: ""
+        scatterFilePath: STM32H743VITx_RAM.sct
         storageLayout:
           RAM:
             - id: 1
@@ -257,7 +257,7 @@ targets:
                 size: "0x0"
                 startAddr: "0x0"
               tag: IROM
-        useCustomScatterFile: false
+        useCustomScatterFile: true
     uploadConfigMap:
       JLink:
         baseAddr: ""

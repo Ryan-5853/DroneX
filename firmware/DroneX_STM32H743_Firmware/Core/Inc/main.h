@@ -53,8 +53,17 @@ extern "C" {
 void Error_Handler(void);
 
 /* USER CODE BEGIN EFP */
-
+void MX_USART1_UART_Init(void);
+void MX_SPI1_Init(void);
+void MX_SPI4_Init(void);
 /* USER CODE END EFP */
+
+/* USER CODE BEGIN ExportedVariables */
+extern UART_HandleTypeDef huart1;
+extern DMA_HandleTypeDef hdma_usart1_tx;
+extern SPI_HandleTypeDef hspi1;
+extern SPI_HandleTypeDef hspi4;
+/* USER CODE END ExportedVariables */
 
 /* Private defines -----------------------------------------------------------*/
 
