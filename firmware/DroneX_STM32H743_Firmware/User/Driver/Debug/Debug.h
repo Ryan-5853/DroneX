@@ -1,7 +1,14 @@
 /**
  * @file Debug.h
  * @brief 非阻塞调试输出框架：整条消息格式化入队，由后端按条发送，保证不撕裂。
- *        硬件传输层通过 Debug_Transport_Send 弱符号或注册回调接入，具体 UART/DMA 稍后绑定。
+ *
+ * 通信链路：
+ *   Debug_Printf (主循环/中断) -> 环形队列 -> Debug_Process (主循环/DMA 回调) -> Debug_Transport_Send -> UART DMA
+ *
+ * 设计要点：
+ *   - 所有缓冲使用静态内存，避免中断覆盖栈
+ *   - 入队/出队在临界区内完成，防止竞态
+ *   - 队列满时丢弃新消息，不覆盖正在发送的 slot
  */
 
 #ifndef __DEBUG_H__
@@ -18,10 +25,10 @@ extern "C" {
  * 配置（可移至 Config.h 或通过编译选项覆盖）
  * -------------------------------------------------------------------------- */
 #ifndef DEBUG_MSG_MAX_LEN
-#define DEBUG_MSG_MAX_LEN  256   /* 单条消息最大字节数（含结尾 \r\n） */
+#define DEBUG_MSG_MAX_LEN  1024   /* 单条消息最大字节数（含结尾 \r\n）；需与 MPU DMA 区域大小一致 */
 #endif
 #ifndef DEBUG_MSG_SLOTS
-#define DEBUG_MSG_SLOTS   8     /* 环形队列消息条数，满则丢最旧 */
+#define DEBUG_MSG_SLOTS   8       /* 环形队列消息条数；满则丢弃新消息 */
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -78,9 +85,10 @@ int Debug_Transport_IsReady(void);
 
 /* ---------------------------------------------------------------------------
  * 使用说明：
- * 1. 在系统初始化时调用 Debug_Init(NULL) 或 Debug_Init(your_transport_callback)。
- * 2. 主循环中周期调用 Debug_Process()，将队列中的消息交给传输层发送。
- * 3. 具体硬件：重写 Debug_Transport_Send()（如 UART+DMA），或通过 Debug_Init(fn) 注册回调。
+ * 1. Debug_Init(transport)：初始化队列，注册传输回调（如 Debug_Transport_Send）。
+ * 2. Debug_UART_Init()：初始化 UART、DMA TX、IT RX（在 Debug_Init 之后）。
+ * 3. 主循环：Debug_UART_Process()（处理 RX 拆包）、Debug_Process()（驱动 TX 发送）。
+ * 4. DMA 完成回调中调用 Debug_Process()，实现链式发送下一条。
  * --------------------------------------------------------------------------- */
 
 #ifdef __cplusplus

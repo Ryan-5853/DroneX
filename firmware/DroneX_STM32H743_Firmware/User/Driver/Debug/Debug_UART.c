@@ -1,8 +1,10 @@
 /**
  * @file Debug_UART.c
  * @brief Driver 层：USART1 TX/RX，IT 非阻塞接收。
- *        TX：DMA 非阻塞发送。缓冲区 0x24000000 由 MPU 置为非 cache，无 D-Cache 一致性问题。
- *        RX：按 \r\n 拆包，通过回调将指令包传递给上层。
+ *
+ * TX：DMA 非阻塞发送。s_tx_buf 位于 AHB SRAM 0x30000000（D2 域 DMA 可访问），
+ *     MPU Region1 已将该区域置为非 cache，消除 D-Cache 一致性问题。
+ * RX：按 \r\n 拆包，通过回调将指令包传递给上层。使用静态缓冲避免栈覆盖。
  */
 
 #include "Driver/Debug/Debug.h"
@@ -13,14 +15,8 @@
 #define DEBUG_UART_TX_BUF_SIZE  DEBUG_MSG_MAX_LEN
 #define DEBUG_UART_RX_BUF_SIZE  256
 
-/* DMA TX 缓冲区：AXI SRAM 0x24000000。MPU Region1 已将该 256B 置为非 cache，无需 CleanDCache。 */
-#if defined(__ARMCC_VERSION) && (__ARMCC_VERSION >= 6000000)
-/* ARM Compiler 6: section 方式 */
-__attribute__((section(".ARM.__at_0x24000000"))) __attribute__((aligned(32)))
-#else
-/* ARM Compiler 5: at 方式，无需 scatter */
-__attribute__((at(0x24000000))) __attribute__((aligned(32)))
-#endif
+/* DMA TX 缓冲区：AHB SRAM 0x30000000（D2 域 DMA 可访问）。MPU Region1 已置为非 cache。 */
+__attribute__((at(0x30000000))) __attribute__((aligned(32)))
 static uint8_t s_tx_buf[DEBUG_UART_TX_BUF_SIZE];
 
 /* volatile 标志位：1=空闲可发送，0=DMA 忙。DMA 完成回调复位为 1 */
@@ -29,7 +25,8 @@ static volatile uint8_t s_dma_tx_idle = 1;
 /* RX: 中断接收单字节，写入线性缓冲；遇 \r\n 置位 line_ready，主循环处理 */
 static uint8_t s_rx_byte;
 static char s_rx_buf[DEBUG_UART_RX_BUF_SIZE];
-static char s_line_buf[DEBUG_UART_RX_BUF_SIZE];
+static char s_line_buf[DEBUG_UART_RX_BUF_SIZE];   /* 中断写入，主循环读出 */
+static char s_line_copy[DEBUG_UART_RX_BUF_SIZE];  /* 主循环拷贝后交给回调，避免回调执行时被覆盖 */
 static volatile uint16_t s_rx_len;
 static volatile uint8_t s_line_ready;
 static Debug_UART_LineCallback_t s_line_cb;
@@ -44,8 +41,8 @@ static void rx_restart(void)
  */
 int Debug_Transport_IsReady(void)
 {
-    // return s_dma_tx_idle ? 1 : 0;
-    return 1;
+    return s_dma_tx_idle ? 1 : 0;
+    // return 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -60,7 +57,6 @@ uint32_t Debug_Transport_Send(const uint8_t *data, uint32_t len)
         return 0;
 
     memcpy(s_tx_buf, data, len);
-
     if (HAL_UART_Transmit_DMA(&huart1, s_tx_buf, (uint16_t)len) != HAL_OK)
         return 0;
 
@@ -131,12 +127,11 @@ void Debug_UART_Process(void)
     if (!s_line_ready) return;
 
     s_line_ready = 0;
-    /* 先拷贝再回调，避免中断在回调执行时覆盖 s_line_buf */
-    char line_copy[DEBUG_UART_RX_BUF_SIZE];
+    /* 拷贝到静态缓冲再回调，避免栈上缓冲被中断覆盖；回调可能调用 Debug_Printf */
     size_t n = strlen(s_line_buf) + 1;
     if (n > DEBUG_UART_RX_BUF_SIZE) n = DEBUG_UART_RX_BUF_SIZE;
-    memcpy(line_copy, s_line_buf, n);
-    line_copy[DEBUG_UART_RX_BUF_SIZE - 1] = '\0';
+    memcpy(s_line_copy, s_line_buf, n);
+    s_line_copy[DEBUG_UART_RX_BUF_SIZE - 1] = '\0';
     if (s_line_cb)
-        s_line_cb(line_copy);
+        s_line_cb(s_line_copy);
 }

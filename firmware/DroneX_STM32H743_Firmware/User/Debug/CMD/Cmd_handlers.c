@@ -22,7 +22,6 @@ static void Cmd_Help(const char *cmd, const Cmd_Param_t *params, int n)
     /* 合并为单条发送，避免多路 Debug_Printf 交错导致撕裂 */
     Debug_Printf("DroneX cmd: <cmd>:para1=xx;para2=xx;\r\n");
     Debug_Printf("help, version, status, reset, imu_cali\r\n");
-    Debug_UART_Flush();  /* 等待输出完成，避免偶发撕裂 */
 }
 
 static void Cmd_Version(const char *cmd, const Cmd_Param_t *params, int n)

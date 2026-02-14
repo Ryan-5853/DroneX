@@ -561,6 +561,16 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>User/Driver/Timing</GroupName>
+          <Files>
+            <File>
+              <FileName>Timing.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Driver/Timing/Timing.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>User/Driver/Debug</GroupName>
           <Files>
             <File>
@@ -587,6 +597,16 @@
               <FileName>Cmd_handlers.c</FileName>
               <FileType>1</FileType>
               <FilePath>../User/Debug/CMD/Cmd_handlers.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Algorithm/Attitude_Est</GroupName>
+          <Files>
+            <File>
+              <FileName>Attitude_Est.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Algorithm/Attitude_Est/Attitude_Est.c</FilePath>
             </File>
           </Files>
         </Group>
