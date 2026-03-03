@@ -171,6 +171,14 @@
 #define  USE_SD_TRANSCEIVER           0U               /*!< use uSD Transceiver */
 #define  USE_SPI_CRC	              0U               /*!< use CRC in SPI */
 
+/* SDMMC: 避免无卡/异常时无限等待导致卡死 */
+#ifndef SDMMC_DATATIMEOUT
+#define SDMMC_DATATIMEOUT              (5000U)          /* 数据超时 5s */
+#endif
+#ifndef SDMMC_MAX_VOLT_TRIAL
+#define SDMMC_MAX_VOLT_TRIAL           (100U)           /* ACMD41 重试次数，无卡时快速失败 */
+#endif
+
 #define  USE_HAL_ADC_REGISTER_CALLBACKS     0U /* ADC register callback disabled     */
 #define  USE_HAL_CEC_REGISTER_CALLBACKS     0U /* CEC register callback disabled     */
 #define  USE_HAL_COMP_REGISTER_CALLBACKS    0U /* COMP register callback disabled    */

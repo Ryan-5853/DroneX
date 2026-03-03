@@ -61,7 +61,7 @@ typedef enum {
 void Cmd_Init(void);
 
 /**
- * @brief 注册内置命令：help、version、status、reset、imu_cali。
+ * @brief 注册内置命令：help、version、status、reset、imu_cali、ESC_cfg。
  */
 void Cmd_RegisterBuiltins(void);
 

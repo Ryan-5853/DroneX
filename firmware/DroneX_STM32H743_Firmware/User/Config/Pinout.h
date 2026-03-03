@@ -20,4 +20,10 @@
 #define IMU1_CS_GPIO_PORT    GPIOA
 #define IMU1_CS_GPIO_PIN     GPIO_PIN_4
 
+/* ----------------------------------------------------------------------------
+ * SD 卡（SDMMC1，4-bit）
+ * PC8-D0, PC9-D1, PC10-D2, PC11-D3, PC12-CLK, PD2-CMD
+ * 初始化由 HAL_SD_MspInit 完成，驱动见 Driver/SD
+ * ---------------------------------------------------------------------------- */
+
 #endif /* __PINOUT_H__ */

@@ -6,6 +6,7 @@
 #include "User_main.h"
 #include "Driver/Debug/Debug.h"
 #include "Driver/Debug/Debug_UART.h"
+#include "Driver/SD/SD.h"
 #include "Debug/Cmd/Cmd.h"
 #include "Application/Attitude/Attitude.h"
 #include "Algorithm/Attitude_Est/Attitude_Est.h"
@@ -14,6 +15,7 @@
 #include "Driver/PIT/PIT.h"
 #include "Driver/Timing/Timing.h"
 #include "main.h"
+#include "stm32h7xx_hal.h"
 
 /* 陀螺仪1 句柄与配置 */
 static IMU_Handle_t     s_imu1_handle;
@@ -21,6 +23,31 @@ static ICM42688_SPI_Config_t s_imu1_cfg;
 /* 陀螺仪2 句柄与配置 */
 static IMU_Handle_t     s_imu2_handle;
 static ICM42688_SPI_Config_t s_imu2_cfg;
+
+/** 自检：验证各模块初始化结果，并输出到 Debug */
+static void User_SelfCheck(void)
+{
+    IMU_Data_t imu_data;
+    int imu1_ok = (IMU_Read(&s_imu1_handle, &imu_data) == IMU_OK);
+    int imu2_ok = (IMU_Read(&s_imu2_handle, &imu_data) == IMU_OK);
+    int sd_ok   = SD_IsReady();
+    uint32_t cy = Timing_GetCycles();
+    int timing_ok = (cy > 0);
+
+    Debug_Printf("=== SelfCheck ===\r\n");
+    Debug_Printf("  IMU1:  %s\r\n", imu1_ok ? "OK" : "FAIL");
+    Debug_Printf("  IMU2:  %s\r\n", imu2_ok ? "OK" : "FAIL");
+    Debug_Printf("  SD:    %s\r\n", sd_ok ? "OK" : "FAIL");
+    Debug_Printf("  DWT:   %s\r\n", timing_ok ? "OK" : "FAIL");
+    Debug_Printf("  Tick:  %lu ms\r\n", (unsigned long)HAL_GetTick());
+    Debug_Printf("================\r\n");
+
+    /* 短暂轮询以尽量送出自检结果（非阻塞） */
+    // for (int i = 0; i < 50; i++) {
+    //     HAL_Delay(1);
+    //     Debug_Process();
+    // }
+}
 
 /** Debug 层：Driver 拆包后的指令包回调，交由 Cmd 解析执行 */
 static void Debug_OnLine(const char *buf)
@@ -91,6 +118,9 @@ void User_Main_Init(void)
 
     (void)IMU_Init(&s_imu2_handle);
 
+    /* SD 卡初始化（可选：无卡时不影响启动，日志模块可调用 SD_IsReady 检查） */
+    (void)SD_Init();
+
     /* 200Hz IMU 任务：PIT_CH0，周期 5000us，NVIC 优先级 1（高优先级） */
     PIT_Config_t pit_cfg = {
         .period_us = 5000,   /* 200Hz = 5ms */
@@ -106,6 +136,9 @@ void User_Main_Init(void)
     pit_cfg.callback  = Attitude_Task;
     if (PIT_Init(PIT_CH1, &pit_cfg) == PIT_OK)
         PIT_Start(PIT_CH1);
+
+    /* 自检并输出结果 */
+    User_SelfCheck();
 }
 
 /**

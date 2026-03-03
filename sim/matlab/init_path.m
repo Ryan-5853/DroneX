@@ -7,4 +7,5 @@ addpath(fullfile(sim_root, 'models'));
 addpath(fullfile(sim_root, 'controllers'));
 addpath(fullfile(sim_root, 'utils'));
 addpath(fullfile(sim_root, 'scripts'));
+addpath(fullfile(sim_root, 'apps'));
 fprintf('DroneX 仿真路径已添加: %s\n', sim_root);

@@ -5,6 +5,7 @@ deviceName: null
 packDir: null
 srcDirs:
   - ../User
+  - ../3rdPartyLib
 virtualFolder:
   name: <virtual_root>
   files: []
@@ -148,6 +149,8 @@ targets:
         - .cmsis/include
         - RTE/_DroneX_STM32H743_Firmware
         - ../User
+        - ../3rdPartyLib
+        - ../3rdPartyLib/FatFs
       libList: []
     excludeList:
       - <virtual_root>/Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_msp_template.c

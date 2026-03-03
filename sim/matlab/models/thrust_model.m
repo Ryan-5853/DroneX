@@ -14,7 +14,9 @@ beta = max(-p.beta_lim, min(p.beta_lim, beta));
 
 % 推力方向（机体系）：无偏转时为 [0;0;+1]（沿 Z_B，惯性系向上）
 % 约定：零欧拉角时 body=inertial，Z 向上，推力沿 +Z
-% 俯仰 alpha 绕 Y，滚转 beta 绕 X：d_body = R_x(beta)*R_y(alpha)*[0;0;1]
+% 俯仰 alpha 绕 Y，滚转 beta 绕 X：d_body = R_x(-beta)*R_y(alpha)*[0;0;1]
+% 正 alpha -> 推力偏向 +X_B；正 beta -> 推力偏向 +Y_B
+% 参考: sim/docs/dynamics_model.md §3.5.1
 sa = sin(alpha); ca = cos(alpha);
 sb = sin(beta);  cb = cos(beta);
 d_body = [sa; sb*ca; cb*ca];  % 单位向量

@@ -7,6 +7,7 @@
 #include "Driver/Debug/Debug.h"
 #include "Driver/Debug/Debug_UART.h"
 #include "Application/Attitude/Attitude.h"
+#include "Debug/ESC_configurer/ESC_configurer.h"
 #include "main.h"
 #include <stdio.h>
 #include <string.h>
@@ -21,7 +22,7 @@ static void Cmd_Help(const char *cmd, const Cmd_Param_t *params, int n)
     (void)n;
     /* 合并为单条发送，避免多路 Debug_Printf 交错导致撕裂 */
     Debug_Printf("DroneX cmd: <cmd>:para1=xx;para2=xx;\r\n");
-    Debug_Printf("help, version, status, reset, imu_cali\r\n");
+    Debug_Printf("help, version, status, reset, imu_cali, ESC_cfg\r\n");
 }
 
 static void Cmd_Version(const char *cmd, const Cmd_Param_t *params, int n)
@@ -83,6 +84,26 @@ static void Cmd_ImuCali(const char *cmd, const Cmd_Param_t *params, int n)
     Debug_Printf("OK imu_cali queued\r\n");
 }
 
+static void Cmd_EscCfg(const char *cmd, const Cmd_Param_t *params, int n)
+{
+    (void)cmd;
+    const char *num_s = Cmd_GetParam(params, n, "num");
+    if (!num_s) {
+        Debug_Printf("ERR ESC_cfg need num\r\n");
+        return;
+    }
+    int num = 0;
+    if (sscanf(num_s, "%d", &num) != 1) {
+        Debug_Printf("ERR num must be integer\r\n");
+        return;
+    }
+    if (ESC_Config(num) != 0) {
+        Debug_Printf("ERR ESC_cfg param invalid\r\n");
+        return;
+    }
+    Debug_Printf("OK ESC_cfg done\r\n");
+}
+
 /* ---------------------------------------------------------------------------
  * 注册内置命令
  * --------------------------------------------------------------------------- */
@@ -93,4 +114,5 @@ void Cmd_RegisterBuiltins(void)
     Cmd_Register("status", Cmd_Status);
     Cmd_Register("reset", Cmd_Reset);
     Cmd_Register("imu_cali", Cmd_ImuCali);
+    Cmd_Register("ESC_cfg", Cmd_EscCfg);
 }
