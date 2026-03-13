@@ -55,6 +55,13 @@ __attribute__((weak)) int Debug_Transport_IsReady(void)
     return 1; /* 默认始终就绪 */
 }
 
+__attribute__((weak)) uint32_t Debug_Transport_BlockingSend(const uint8_t *data, uint32_t len)
+{
+    (void)data;
+    (void)len;
+    return len; /* 默认"全部接受"；实际接入硬件时用 HAL_UART_Transmit 重写 */
+}
+
 /* ---------------------------------------------------------------------------
  * Debug_Init
  * --------------------------------------------------------------------------- */
@@ -148,4 +155,49 @@ void Debug_Process(void)
 int Debug_IsQueueEmpty(void)
 {
     return RING_EMPTY() ? 1 : 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Debug_BlockingPrintf：格式化后直接阻塞发送，不经过队列。
+ * 使用独立静态缓冲区，与异步路径互不干扰。
+ * --------------------------------------------------------------------------- */
+static char s_blk_buf[DEBUG_MSG_MAX_LEN];
+
+Debug_Status_t Debug_BlockingPrintf(const char *fmt, ...)
+{
+    if (fmt == NULL) return DEBUG_ERR_PARAM;
+
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(s_blk_buf, sizeof(s_blk_buf), fmt, ap);
+    va_end(ap);
+
+    if (n < 0) return DEBUG_ERR_PARAM;
+
+    size_t len = (size_t)n;
+    int truncated = 0;
+    if (len >= sizeof(s_blk_buf)) {
+        len = sizeof(s_blk_buf) - 1;
+        s_blk_buf[len] = '\0';
+        truncated = 1;
+    }
+
+    if (len >= 2 && s_blk_buf[len - 2] == '\r' && s_blk_buf[len - 1] == '\n') {
+        /* 已有 \r\n */
+    } else if (len >= 1 && s_blk_buf[len - 1] == '\n') {
+        if (len + 1 < sizeof(s_blk_buf)) {
+            s_blk_buf[len - 1] = '\r';
+            s_blk_buf[len]     = '\n';
+            len += 1;
+        }
+    } else {
+        if (len + 2 <= sizeof(s_blk_buf)) {
+            s_blk_buf[len]     = '\r';
+            s_blk_buf[len + 1] = '\n';
+            len += 2;
+        }
+    }
+
+    Debug_Transport_BlockingSend((const uint8_t *)s_blk_buf, (uint32_t)len);
+    return truncated ? DEBUG_ERR_TRUNC : DEBUG_OK;
 }

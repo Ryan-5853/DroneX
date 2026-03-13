@@ -621,6 +621,16 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>User/Driver/ESC</GroupName>
+          <Files>
+            <File>
+              <FileName>ESC.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Driver/ESC/ESC.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>::CMSIS</GroupName>
         </Group>
       </Groups>

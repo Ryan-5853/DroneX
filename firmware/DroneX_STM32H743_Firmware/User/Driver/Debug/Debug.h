@@ -28,7 +28,7 @@ extern "C" {
 #define DEBUG_MSG_MAX_LEN  1024   /* 单条消息最大字节数（含结尾 \r\n）；需与 MPU DMA 区域大小一致 */
 #endif
 #ifndef DEBUG_MSG_SLOTS
-#define DEBUG_MSG_SLOTS   8       /* 环形队列消息条数；满则丢弃新消息 */
+#define DEBUG_MSG_SLOTS   16       /* 环形队列消息条数；满则丢弃新消息 */
 #endif
 
 /* ---------------------------------------------------------------------------
@@ -62,6 +62,14 @@ Debug_Status_t Debug_Init(Debug_Transport_SendFn transport);
 Debug_Status_t Debug_Printf(const char *fmt, ...);
 
 /**
+ * @brief 阻塞式格式化输出：直接格式化并轮询发送，不经过队列。
+ *        用于异步发送机制（DMA / 队列）尚未建立前的早期启动调试。
+ *        发送完成后才返回，不可在中断中调用。
+ * @return DEBUG_OK 发送成功；DEBUG_ERR_TRUNC 被截断但已发送。
+ */
+Debug_Status_t Debug_BlockingPrintf(const char *fmt, ...);
+
+/**
  * @brief 从队列取出一条消息并交给传输层发送。应在主循环或 DMA 空闲时周期调用。
  *        若传输层返回 0（忙），本条会保留，下次再试，保证按条完整发送。
  */
@@ -82,6 +90,13 @@ uint32_t Debug_Transport_Send(const uint8_t *data, uint32_t len);
  * @brief 弱符号：传输层是否空闲可发送。DMA 驱动重写，返回 1 表示空闲。
  */
 int Debug_Transport_IsReady(void);
+
+/**
+ * @brief 弱符号：阻塞式底层发送接口。轮询方式将数据全部发出后才返回。
+ *        默认空实现；在 UART 驱动中用 HAL_UART_Transmit 重写。
+ * @return 已发送的字节数；0 表示失败。
+ */
+uint32_t Debug_Transport_BlockingSend(const uint8_t *data, uint32_t len);
 
 /* ---------------------------------------------------------------------------
  * 使用说明：

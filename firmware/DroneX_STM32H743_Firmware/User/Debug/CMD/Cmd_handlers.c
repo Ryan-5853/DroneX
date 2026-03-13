@@ -22,7 +22,7 @@ static void Cmd_Help(const char *cmd, const Cmd_Param_t *params, int n)
     (void)n;
     /* 合并为单条发送，避免多路 Debug_Printf 交错导致撕裂 */
     Debug_Printf("DroneX cmd: <cmd>:para1=xx;para2=xx;\r\n");
-    Debug_Printf("help, version, status, reset, imu_cali, ESC_cfg\r\n");
+    Debug_Printf("help, version, status, reset, imu_cali, ESC_cfg, power:N(VOFA+)\r\n");
 }
 
 static void Cmd_Version(const char *cmd, const Cmd_Param_t *params, int n)
@@ -104,6 +104,14 @@ static void Cmd_EscCfg(const char *cmd, const Cmd_Param_t *params, int n)
     Debug_Printf("OK ESC_cfg done\r\n");
 }
 
+/* VOFA+ 控件发送 power:N 时，动力值已在 Debug_OnLine 中解析并更新，此处仅避免报 unknown */
+static void Cmd_Power(const char *cmd, const Cmd_Param_t *params, int n)
+{
+    (void)cmd;
+    (void)params;
+    (void)n;
+}
+
 /* ---------------------------------------------------------------------------
  * 注册内置命令
  * --------------------------------------------------------------------------- */
@@ -115,4 +123,5 @@ void Cmd_RegisterBuiltins(void)
     Cmd_Register("reset", Cmd_Reset);
     Cmd_Register("imu_cali", Cmd_ImuCali);
     Cmd_Register("ESC_cfg", Cmd_EscCfg);
+    Cmd_Register("power", Cmd_Power);
 }

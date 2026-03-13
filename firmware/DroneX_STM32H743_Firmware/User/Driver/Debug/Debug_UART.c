@@ -46,6 +46,18 @@ int Debug_Transport_IsReady(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * 重写 Debug_Transport_BlockingSend：HAL 轮询发送，阻塞至全部发出。
+ * 用于 DMA / 队列尚未初始化时的早期启动调试。
+ * --------------------------------------------------------------------------- */
+uint32_t Debug_Transport_BlockingSend(const uint8_t *data, uint32_t len)
+{
+    if (data == NULL || len == 0) return 0;
+    if (HAL_UART_Transmit(&huart1, (uint8_t *)data, (uint16_t)len, HAL_MAX_DELAY) != HAL_OK)
+        return 0;
+    return len;
+}
+
+/* ---------------------------------------------------------------------------
  * 重写 Debug_Transport_Send：仅在 s_dma_tx_idle 时由 Debug_Process 调用。拷贝、启动 DMA 后置忙。
  * --------------------------------------------------------------------------- */
 uint32_t Debug_Transport_Send(const uint8_t *data, uint32_t len)
@@ -96,6 +108,17 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
             s_rx_len = 0; /* 溢出丢弃 */
         }
     }
+    rx_restart();
+}
+
+/* ---------------------------------------------------------------------------
+ * UART 错误回调：溢出/帧错误等发生后 HAL 不再触发 RxCplt，需在此重启接收，否则 power 等串口数据会永久停止更新
+ * --------------------------------------------------------------------------- */
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart->Instance != USART1) return;
+    (void)HAL_UART_AbortReceive(huart);
+    s_rx_len = 0;
     rx_restart();
 }
 
