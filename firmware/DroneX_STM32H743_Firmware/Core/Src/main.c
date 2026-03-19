@@ -43,6 +43,7 @@
 
 /* USER CODE BEGIN PV */
 UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart1_tx;
 SPI_HandleTypeDef hspi1;
 SPI_HandleTypeDef hspi4;
@@ -94,6 +95,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART1_UART_Init();
+  MX_USART6_UART_Init();
   MX_SPI1_Init();
   MX_SPI4_Init();
   /* USER CODE BEGIN 2 */
@@ -210,6 +212,29 @@ void MX_USART1_UART_Init(void)
   huart1.Init.ClockPrescaler = UART_PRESCALER_DIV1;
   huart1.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
   if (HAL_UART_Init(&huart1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief USART6 初始化：PC7(RX)，SBUS 100000 8E2，开启 RX 反相
+  */
+void MX_USART6_UART_Init(void)
+{
+  huart6.Instance = USART6;
+  huart6.Init.BaudRate = 100000;
+  huart6.Init.WordLength = UART_WORDLENGTH_9B;
+  huart6.Init.StopBits = UART_STOPBITS_2;
+  huart6.Init.Parity = UART_PARITY_EVEN;
+  huart6.Init.Mode = UART_MODE_RX;
+  huart6.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart6.Init.OverSampling = UART_OVERSAMPLING_16;
+  huart6.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
+  huart6.Init.ClockPrescaler = UART_PRESCALER_DIV1;
+  huart6.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_RXINVERT_INIT;
+  huart6.AdvancedInit.RxPinLevelInvert = UART_ADVFEATURE_RXINV_ENABLE;
+  if (HAL_UART_Init(&huart6) != HAL_OK)
   {
     Error_Handler();
   }

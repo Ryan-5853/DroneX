@@ -128,6 +128,31 @@ void HAL_UART_MspInit(UART_HandleTypeDef *huart)
     HAL_NVIC_SetPriority(DMA2_Stream7_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(DMA2_Stream7_IRQn);
   }
+  else if (huart->Instance == USART6)
+  {
+    /* Periph clock */
+    PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USART6;
+    PeriphClkInitStruct.Usart16ClockSelection = RCC_USART16CLKSOURCE_PCLK2;
+    if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInitStruct) != HAL_OK)
+    {
+      Error_Handler();
+    }
+
+    __HAL_RCC_GPIOC_CLK_ENABLE();
+    __HAL_RCC_USART6_CLK_ENABLE();
+
+    /* GPIO: PC7-RX */
+    GPIO_InitStruct.Pin = GPIO_PIN_7;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF7_USART6;
+    HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+    /* NVIC */
+    HAL_NVIC_SetPriority(USART6_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(USART6_IRQn);
+  }
 }
 
 void HAL_SPI_MspInit(SPI_HandleTypeDef *hspi)
@@ -225,6 +250,12 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef *huart)
     HAL_DMA_DeInit(huart->hdmatx);
     HAL_NVIC_DisableIRQ(USART1_IRQn);
     HAL_NVIC_DisableIRQ(DMA2_Stream7_IRQn);
+  }
+  else if (huart->Instance == USART6)
+  {
+    __HAL_RCC_USART6_CLK_DISABLE();
+    HAL_GPIO_DeInit(GPIOC, GPIO_PIN_7);
+    HAL_NVIC_DisableIRQ(USART6_IRQn);
   }
 }
 

@@ -47,6 +47,7 @@
 
 /* Private function prototypes -----------------------------------------------*/
 /* USER CODE BEGIN PFP */
+void RC_UART_IRQHandler(void);
 
 /* USER CODE END PFP */
 
@@ -57,6 +58,7 @@
 
 /* External variables --------------------------------------------------------*/
 extern UART_HandleTypeDef huart1;
+extern UART_HandleTypeDef huart6;
 extern DMA_HandleTypeDef hdma_usart1_tx;
 /* USER CODE BEGIN EV */
 
@@ -210,6 +212,11 @@ void USART1_IRQHandler(void)
 void DMA2_Stream7_IRQHandler(void)
 {
   HAL_DMA_IRQHandler(&hdma_usart1_tx);
+}
+
+void USART6_IRQHandler(void)
+{
+  RC_UART_IRQHandler();
 }
 
 /* USER CODE END 1 */

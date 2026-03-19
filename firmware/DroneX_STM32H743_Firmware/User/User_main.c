@@ -15,6 +15,8 @@
 #include "Driver/PIT/PIT.h"
 #include "Driver/Timing/Timing.h"
 #include "Driver/ESC/ESC.h"
+#include "Driver/RC/RC.h"
+#include "Driver/Vector_Gimbal/Vector_Gimbal.h"
 #include "main.h"
 #include "stm32h7xx_hal.h"
 #include <stdio.h>
@@ -45,6 +47,9 @@ static uint16_t s_esc_test_raw;
 /* VOFA+ 上位机动力参数：串口解析 "power:N" 更新，0=停转，1..1000=动力档，由 ESC_1kHz_Task 按原频率打包 DShot 发送 */
 static volatile uint16_t s_power_from_uart = 0U;
 #define POWER_UART_MAX  1000U
+static uint32_t s_rc_last_print_ms = 0U;
+static int16_t s_gimbol_cmd0 = 0;
+static int16_t s_gimbol_cmd1 = 0;
 
 /* ESC 周期发送任务：发送频率不变，油门值来自串口解析的 s_power_from_uart（power:0..1000），打包 DShot 发送 */
 static void ESC_1kHz_Task(void)
@@ -61,7 +66,6 @@ static void ESC_1kHz_Task(void)
 
     (void)ESC_SetThrottleRaw(ESC_CH1, raw, false);
     (void)ESC_SetThrottleRaw(ESC_CH2, raw, false);
-    ESC_TestPwm_SetPower(p);  /* PD15 调试 PWM 与 power 同步：0->1ms，1000->2ms */
     ESC_RecoverIfStuck(2);
     if (!ESC_IsBusy()) {
         (void)ESC_Update();
@@ -169,6 +173,7 @@ void User_Main_Init(void)
     Cmd_RegisterBuiltins();
     Debug_UART_SetLineCallback(Debug_OnLine);
     Debug_UART_Init();
+    RC_Init();
 
     Timing_Init();
     // Attitude_Est_Init();
@@ -209,8 +214,8 @@ void User_Main_Init(void)
     }
     
 
-    /* 使用 PD15=TIM4_CH4 输出 50Hz PWM，用于测试模拟 PWM 电调/舵机信号输入 */
-    ESC_TestPwm_StartOnPD15();
+    /* 云台舵机：TIM4_CH3/CH4 -> PD14/PD15，约333Hz，接口 -10000..10000 */
+    Vector_Gimbal_Init();
 
     /* 200Hz IMU 任务：PIT_CH0，周期 5000us，NVIC 优先级 1（高优先级） */
     PIT_Config_t pit_cfg = {
@@ -259,35 +264,56 @@ void User_Main_Init(void)
  */
 void User_Main_Loop(void)
 {
-    if (s_esc_dbg_report_flag) {
-        ESC_DebugInfo_t info;
-        s_esc_dbg_report_flag = 0U;
-        ESC_GetDebugInfo(&info);
-        Debug_Printf("ESC DBG init=%u busy=%u msp=%lu upd_req=%lu upd_ok=%lu busy_rej=%lu fail3=%lu fail4=%lu done3=%lu done4=%lu irq3=%lu irq4=%lu raw1=%u raw2=%u\r\n",
-            (unsigned)info.initialized,
-            (unsigned)info.dma_busy,
-            (unsigned long)info.msp_init_count,
-            (unsigned long)info.update_req_count,
-            (unsigned long)info.update_ok_count,
-            (unsigned long)info.update_busy_reject_count,
-            (unsigned long)info.start_dma_ch3_fail_count,
-            (unsigned long)info.start_dma_ch4_fail_count,
-            (unsigned long)info.pulse_done_ch3_count,
-            (unsigned long)info.pulse_done_ch4_count,
-            (unsigned long)info.dma_irq_ch3_count,
-            (unsigned long)info.dma_irq_ch4_count,
-            (unsigned)info.last_raw_ch1,
-            (unsigned)info.last_raw_ch2);
-        Debug_Printf("ESC DBG2 half3=%lu half4=%lu terr=%lu recover=%lu\r\n",
-            (unsigned long)info.pulse_half_ch3_count,
-            (unsigned long)info.pulse_half_ch4_count,
-            (unsigned long)info.tim_error_count,
-            (unsigned long)info.stuck_recover_count);
-        Debug_Printf("ESC power(uart)=%u elapsed=%lu ms\r\n",
-            (unsigned)s_power_from_uart,
-            (unsigned long)(HAL_GetTick() - s_esc_arm_start_ms));
+    const RC_Signal_t *rc = RC_GetSignal();
+    s_gimbol_cmd0 = (int16_t)((int32_t)rc->ch[0] * 10);
+    s_gimbol_cmd1 = (int16_t)((int32_t)rc->ch[1] * 10);
+    (void)Vector_Gimbal_Set(VECTOR_GIMBAL_AXIS_0, s_gimbol_cmd0);
+    (void)Vector_Gimbal_Set(VECTOR_GIMBAL_AXIS_1, s_gimbol_cmd1);
+
+    uint32_t now = HAL_GetTick();
+    if ((now - s_rc_last_print_ms) >= 100U) {
+        s_rc_last_print_ms = now;
+        Debug_Printf(
+            "RC MAP %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d | gmb=%d,%d ch17=%u ch18=%u on=%u lost=%u fs=%u cnt=%lu",
+            (int)rc->ch[0],  (int)rc->ch[1],  (int)rc->ch[2],  (int)rc->ch[3],
+            (int)rc->ch[4],  (int)rc->ch[5],  (int)rc->ch[6],  (int)rc->ch[7],
+            (int)rc->ch[8],  (int)rc->ch[9],  (int)rc->ch[10], (int)rc->ch[11],
+            (int)rc->ch[12], (int)rc->ch[13], (int)rc->ch[14], (int)rc->ch[15],
+            (int)s_gimbol_cmd0, (int)s_gimbol_cmd1,
+            (unsigned)rc->ch17, (unsigned)rc->ch18, (unsigned)rc->is_online,
+            (unsigned)rc->frame_lost, (unsigned)rc->failsafe, (unsigned long)rc->frame_count);
     }
 
+    // if (s_esc_dbg_report_flag) {
+    //     ESC_DebugInfo_t info;
+    //     s_esc_dbg_report_flag = 0U;
+    //     ESC_GetDebugInfo(&info);
+    //     Debug_Printf("ESC DBG init=%u busy=%u msp=%lu upd_req=%lu upd_ok=%lu busy_rej=%lu fail3=%lu fail4=%lu done3=%lu done4=%lu irq3=%lu irq4=%lu raw1=%u raw2=%u\r\n",
+    //         (unsigned)info.initialized,
+    //         (unsigned)info.dma_busy,
+    //         (unsigned long)info.msp_init_count,
+    //         (unsigned long)info.update_req_count,
+    //         (unsigned long)info.update_ok_count,
+    //         (unsigned long)info.update_busy_reject_count,
+    //         (unsigned long)info.start_dma_ch3_fail_count,
+    //         (unsigned long)info.start_dma_ch4_fail_count,
+    //         (unsigned long)info.pulse_done_ch3_count,
+    //         (unsigned long)info.pulse_done_ch4_count,
+    //         (unsigned long)info.dma_irq_ch3_count,
+    //         (unsigned long)info.dma_irq_ch4_count,
+    //         (unsigned)info.last_raw_ch1,
+    //         (unsigned)info.last_raw_ch2);
+    //     Debug_Printf("ESC DBG2 half3=%lu half4=%lu terr=%lu recover=%lu\r\n",
+    //         (unsigned long)info.pulse_half_ch3_count,
+    //         (unsigned long)info.pulse_half_ch4_count,
+    //         (unsigned long)info.tim_error_count,
+    //         (unsigned long)info.stuck_recover_count);
+    //     Debug_Printf("ESC power(uart)=%u elapsed=%lu ms\r\n",
+    //         (unsigned)s_power_from_uart,
+    //         (unsigned long)(HAL_GetTick() - s_esc_arm_start_ms));
+    // }
+
     Debug_UART_Process();
+    RC_Process();
     Debug_Process();
 }

@@ -151,6 +151,7 @@ targets:
         - ../User
         - ../3rdPartyLib
         - ../3rdPartyLib/FatFs
+        - ../User/Driver/Vector_Gimbal
       libList: []
     excludeList:
       - <virtual_root>/Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_msp_template.c

@@ -631,6 +631,26 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>User/Driver/RC</GroupName>
+          <Files>
+            <File>
+              <FileName>RC.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Driver/RC/RC.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Driver/Vector_Gimbal</GroupName>
+          <Files>
+            <File>
+              <FileName>Vector_Gimbal.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Driver/Vector_Gimbal/Vector_Gimbal.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>::CMSIS</GroupName>
         </Group>
       </Groups>
