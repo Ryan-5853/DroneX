@@ -598,6 +598,11 @@
               <FileType>1</FileType>
               <FilePath>../User/Debug/CMD/Cmd_handlers.c</FilePath>
             </File>
+            <File>
+              <FileName>Cmd_cfg_table.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Debug/CMD/Cmd_cfg_table.c</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -607,6 +612,26 @@
               <FileName>Attitude_Est.c</FileName>
               <FileType>1</FileType>
               <FilePath>../User/Algorithm/Attitude_Est/Attitude_Est.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Algorithm/Common/PID</GroupName>
+          <Files>
+            <File>
+              <FileName>PID.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Algorithm/Common/PID/PID.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Algorithm/Att_Ctrl_PID</GroupName>
+          <Files>
+            <File>
+              <FileName>Att_Ctrl_PID.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Algorithm/Att_Ctrl_PID/Att_Ctrl_PID.c</FilePath>
             </File>
           </Files>
         </Group>
@@ -647,6 +672,16 @@
               <FileName>Vector_Gimbal.c</FileName>
               <FileType>1</FileType>
               <FilePath>../User/Driver/Vector_Gimbal/Vector_Gimbal.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
+          <GroupName>User/Driver/Flash</GroupName>
+          <Files>
+            <File>
+              <FileName>Flash_Param.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Driver/Flash/Flash_Param.c</FilePath>
             </File>
           </Files>
         </Group>

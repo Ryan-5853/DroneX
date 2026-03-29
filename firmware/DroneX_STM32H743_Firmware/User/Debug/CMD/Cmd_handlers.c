@@ -4,12 +4,17 @@
  */
 
 #include "Debug/Cmd/Cmd.h"
+#include "Debug/Cmd/Cmd_cfg_table.h"
 #include "Driver/Debug/Debug.h"
 #include "Driver/Debug/Debug_UART.h"
 #include "Application/Attitude/Attitude.h"
 #include "Debug/ESC_configurer/ESC_configurer.h"
 #include "main.h"
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
 #include <string.h>
 
 /* ---------------------------------------------------------------------------
@@ -22,7 +27,7 @@ static void Cmd_Help(const char *cmd, const Cmd_Param_t *params, int n)
     (void)n;
     /* 合并为单条发送，避免多路 Debug_Printf 交错导致撕裂 */
     Debug_Printf("DroneX cmd: <cmd>:para1=xx;para2=xx;\r\n");
-    Debug_Printf("help, version, status, reset, imu_cali, ESC_cfg, power:N(VOFA+)\r\n");
+    Debug_Printf("help, version, status, reset, imu_cali, ESC_cfg, cfg:name=;val=, power:N(VOFA+)\r\n");
 }
 
 static void Cmd_Version(const char *cmd, const Cmd_Param_t *params, int n)
@@ -84,6 +89,56 @@ static void Cmd_ImuCali(const char *cmd, const Cmd_Param_t *params, int n)
     Debug_Printf("OK imu_cali queued\r\n");
 }
 
+/**
+ * cfg:name=<参数名>;val=<值>;
+ * 整型：十进制或 0x 十六进制（strtol）；浮点： sscanf %f。
+ */
+static void Cmd_Cfg(const char *cmd, const Cmd_Param_t *params, int n)
+{
+    (void)cmd;
+    const char *name_s = Cmd_GetParam(params, n, "name");
+    const char *val_s = Cmd_GetParam(params, n, "val");
+    if (!name_s || !val_s) {
+        Debug_Printf("ERR cfg need name,val\r\n");
+        return;
+    }
+    const Cmd_Cfg_Entry_t *e = Cmd_Cfg_Lookup(name_s);
+    if (e == NULL || e->addr == NULL) {
+        Debug_Printf("ERR cfg unknown name\r\n");
+        return;
+    }
+    switch (e->type) {
+    case CMD_CFG_TYPE_INT32: {
+        char *end = NULL;
+        errno = 0;
+        long v = strtol(val_s, &end, 0);
+        if (end == val_s || (end != NULL && *end != '\0')) {
+            Debug_Printf("ERR cfg val not integer\r\n");
+            return;
+        }
+        if (errno == ERANGE || v < (long)INT32_MIN || v > (long)INT32_MAX) {
+            Debug_Printf("ERR cfg int32 range\r\n");
+            return;
+        }
+        *(int32_t *)e->addr = (int32_t)v;
+        break;
+    }
+    case CMD_CFG_TYPE_FLOAT: {
+        float v = 0.f;
+        if (sscanf(val_s, "%f", &v) != 1) {
+            Debug_Printf("ERR cfg val not float\r\n");
+            return;
+        }
+        *(float *)e->addr = v;
+        break;
+    }
+    default:
+        Debug_Printf("ERR cfg bad type\r\n");
+        return;
+    }
+    Debug_Printf("OK cfg %s\r\n", name_s);
+}
+
 static void Cmd_EscCfg(const char *cmd, const Cmd_Param_t *params, int n)
 {
     (void)cmd;
@@ -123,5 +178,6 @@ void Cmd_RegisterBuiltins(void)
     Cmd_Register("reset", Cmd_Reset);
     Cmd_Register("imu_cali", Cmd_ImuCali);
     Cmd_Register("ESC_cfg", Cmd_EscCfg);
+    Cmd_Register("cfg", Cmd_Cfg);
     Cmd_Register("power", Cmd_Power);
 }
