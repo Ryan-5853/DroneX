@@ -5,8 +5,8 @@
  *
  * 工作流程：
  *   1. 收到 num=1/2 → NVIC 屏蔽所有 PIT 定时器中断向量，仅保留 USART1 调试通信
- *   2. 初始化 PD5(推挽输出)、PD6(输入)、PA2(上拉开漏输出)
- *   3. 进入阻塞轮询：PD6→PA2 信号穿透，PA2→PD5 电平回读
+ *   2. 初始化 PB9(推挽输出)、PB8(输入)、PA2/PA3(上拉开漏输出)
+ *   3. 进入阻塞轮询：PB8→PA2/PA3 信号穿透，PA2/PA3→PB9 电平回读
  *   4. 循环内维持 Debug_UART_Process / Debug_Process 以接收退出指令
  *   5. 收到 num=0 → 标志位清零，退出循环，反初始化 IO，NVIC 恢复中断
  *
@@ -48,26 +48,26 @@ static uint8_t s_irq_was_enabled[PIT_MAP_COUNT];
 static void ESC_GPIO_Init(void)
 {
     __HAL_RCC_GPIOA_CLK_ENABLE();
-    __HAL_RCC_GPIOD_CLK_ENABLE();
+    __HAL_RCC_GPIOB_CLK_ENABLE();
 
     GPIO_InitTypeDef gpio = {0};
 
-    /* PD5: 推挽输出 */
-    gpio.Pin   = GPIO_PIN_5;
+    /* PB9: 推挽输出 */
+    gpio.Pin   = GPIO_PIN_9;
     gpio.Mode  = GPIO_MODE_OUTPUT_PP;
     gpio.Pull  = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    HAL_GPIO_Init(GPIOD, &gpio);
+    HAL_GPIO_Init(GPIOB, &gpio);
 
-    /* PD6: 输入 */
-    gpio.Pin   = GPIO_PIN_6;
+    /* PB8: 输入 */
+    gpio.Pin   = GPIO_PIN_8;
     gpio.Mode  = GPIO_MODE_INPUT;
     gpio.Pull  = GPIO_NOPULL;
     gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
-    HAL_GPIO_Init(GPIOD, &gpio);
+    HAL_GPIO_Init(GPIOB, &gpio);
 
-    /* PA2: 上拉开漏输出 */
-    gpio.Pin   = GPIO_PIN_2;
+    /* PA2/PA3: 上拉开漏输出 */
+    gpio.Pin   = GPIO_PIN_2 | GPIO_PIN_3;
     gpio.Mode  = GPIO_MODE_OUTPUT_OD;
     gpio.Pull  = GPIO_PULLUP;
     gpio.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
@@ -76,8 +76,8 @@ static void ESC_GPIO_Init(void)
 
 static void ESC_GPIO_DeInit(void)
 {
-    HAL_GPIO_DeInit(GPIOD, GPIO_PIN_5 | GPIO_PIN_6);
-    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_2);
+    HAL_GPIO_DeInit(GPIOB, GPIO_PIN_8 | GPIO_PIN_9);
+    HAL_GPIO_DeInit(GPIOA, GPIO_PIN_2 | GPIO_PIN_3);
 }
 
 /* -----------------------------------------------------------------------
@@ -140,29 +140,31 @@ int ESC_Config(int num)
     /* 初始化穿透 IO */
     ESC_GPIO_Init();
 
-    Debug_Printf("ESC passthrough enter: ESC%d  PD6->PA2->PD5\r\n", num);
+    Debug_Printf("ESC passthrough enter: ESC%d  PB8->PA%d->PB9\r\n", num, (num == 1) ? 2 : 3);
     Debug_UART_Flush();
 
     s_esc_debug_active = 1;
 
     /*
      * 阻塞式穿透轮询：
-     *   PD6(输入) → PA2(开漏输出)：外部信号穿透至电调
-     *   PA2(读回) → PD5(推挽输出)：电调实际电平回读
+     *   PB8(输入) → PA2/PA3(开漏输出)：外部信号穿透至电调
+     *   PA2/PA3(读回) → PB9(推挽输出)：电调实际电平回读
      *   同时维持调试串口服务，以接收 num=0 退出指令
      */
     while (s_esc_debug_active) {
-        /* PD6 → PA2 */
-        if (GPIOD->IDR & (1U << 6))
-            GPIOA->BSRR = (1U << 2);
-        else
-            GPIOA->BSRR = (1U << 18);
+        const uint32_t pa_pin = (s_esc_channel == 1) ? 2U : 3U;
 
-        /* PA2 → PD5 */
-        if (GPIOA->IDR & (1U << 2))
-            GPIOD->BSRR = (1U << 5);
+        /* PB8 → PA2/PA3 */
+        if (GPIOB->IDR & (1U << 8))
+            GPIOA->BSRR = (1U << pa_pin);
         else
-            GPIOD->BSRR = (1U << 21);
+            GPIOA->BSRR = (1U << (pa_pin + 16U));
+
+        /* PA2/PA3 → PB9 */
+        if (GPIOA->IDR & (1U << pa_pin))
+            GPIOB->BSRR = (1U << 9);
+        else
+            GPIOB->BSRR = (1U << 25);
 
         Debug_UART_Process();
         Debug_Process();

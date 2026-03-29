@@ -70,6 +70,13 @@ Debug_Status_t Debug_Printf(const char *fmt, ...);
 Debug_Status_t Debug_BlockingPrintf(const char *fmt, ...);
 
 /**
+ * @brief Panic 日志：用于 Error/Fault 场景的兜底输出。
+ *        特点：不经过队列，尽量以有限超时阻塞发送，避免因主循环停滞而完全失去日志。
+ *        注意：为降低死锁风险，底层发送应使用短超时，不保证 100% 发送成功。
+ */
+Debug_Status_t Debug_PanicPrintf(const char *fmt, ...);
+
+/**
  * @brief 从队列取出一条消息并交给传输层发送。应在主循环或 DMA 空闲时周期调用。
  *        若传输层返回 0（忙），本条会保留，下次再试，保证按条完整发送。
  */

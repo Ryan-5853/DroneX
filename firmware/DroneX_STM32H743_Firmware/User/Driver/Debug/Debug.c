@@ -25,7 +25,7 @@ typedef struct {
 /* ---------------------------------------------------------------------------
  * 环形队列状态
  * --------------------------------------------------------------------------- */
-static volatile Debug_MsgSlot_t s_ring[DEBUG_MSG_SLOTS];
+static Debug_MsgSlot_t s_ring[DEBUG_MSG_SLOTS];
 static volatile uint32_t s_head;   /* 下一笔写入位置 */
 static volatile uint32_t s_tail;   /* 下一笔读出位置 */
 static Debug_Transport_SendFn s_transport;  /* 若非 NULL 则优先于弱符号 */
@@ -141,15 +141,26 @@ void Debug_Process(void)
     }
 
     uint16_t len;
-    Debug_MsgSlot_t *slot = &s_ring[s_tail];
+    uint32_t tail_idx = s_tail;
+    Debug_MsgSlot_t *slot = &s_ring[tail_idx];
+    Debug_Transport_SendFn send = s_transport ? s_transport : Debug_Transport_Send;
+    uint32_t sent;
+
     len = slot->len;
     if (len > sizeof(s_send_buf)) len = sizeof(s_send_buf);
     memcpy(s_send_buf, slot->data, len);
-    s_tail = (s_tail + 1) % DEBUG_MSG_SLOTS;  /* 出队，释放 slot */
     __enable_irq();
 
-    Debug_Transport_SendFn send = s_transport ? s_transport : Debug_Transport_Send;
-    (void)send(s_send_buf, (uint32_t)len);
+    sent = send(s_send_buf, (uint32_t)len);
+    if (sent != (uint32_t)len) {
+        return; /* 发送失败/忙：保留队列，等待下次重试 */
+    }
+
+    __disable_irq();
+    if (s_tail == tail_idx) {
+        s_tail = (s_tail + 1U) % DEBUG_MSG_SLOTS;  /* 发送成功后再出队 */
+    }
+    __enable_irq();
 }
 
 int Debug_IsQueueEmpty(void)
@@ -199,5 +210,50 @@ Debug_Status_t Debug_BlockingPrintf(const char *fmt, ...)
     }
 
     Debug_Transport_BlockingSend((const uint8_t *)s_blk_buf, (uint32_t)len);
+    return truncated ? DEBUG_ERR_TRUNC : DEBUG_OK;
+}
+
+Debug_Status_t Debug_PanicPrintf(const char *fmt, ...)
+{
+    if (fmt == NULL) return DEBUG_ERR_PARAM;
+
+    __disable_irq();
+
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(s_blk_buf, sizeof(s_blk_buf), fmt, ap);
+    va_end(ap);
+
+    if (n < 0) {
+        __enable_irq();
+        return DEBUG_ERR_PARAM;
+    }
+
+    size_t len = (size_t)n;
+    int truncated = 0;
+    if (len >= sizeof(s_blk_buf)) {
+        len = sizeof(s_blk_buf) - 1;
+        s_blk_buf[len] = '\0';
+        truncated = 1;
+    }
+
+    if (len >= 2 && s_blk_buf[len - 2] == '\r' && s_blk_buf[len - 1] == '\n') {
+        /* 已有 \r\n */
+    } else if (len >= 1 && s_blk_buf[len - 1] == '\n') {
+        if (len + 1 < sizeof(s_blk_buf)) {
+            s_blk_buf[len - 1] = '\r';
+            s_blk_buf[len]     = '\n';
+            len += 1;
+        }
+    } else {
+        if (len + 2 <= sizeof(s_blk_buf)) {
+            s_blk_buf[len]     = '\r';
+            s_blk_buf[len + 1] = '\n';
+            len += 2;
+        }
+    }
+
+    (void)Debug_Transport_BlockingSend((const uint8_t *)s_blk_buf, (uint32_t)len);
+    __enable_irq();
     return truncated ? DEBUG_ERR_TRUNC : DEBUG_OK;
 }

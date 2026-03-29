@@ -22,6 +22,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "User_main.h"
+#include "Driver/Debug/Debug.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -47,6 +48,7 @@ UART_HandleTypeDef huart6;
 DMA_HandleTypeDef hdma_usart1_tx;
 SPI_HandleTypeDef hspi1;
 SPI_HandleTypeDef hspi4;
+static uint32_t s_reset_flags_snapshot = 0U;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -70,6 +72,8 @@ int main(void)
 {
 
   /* USER CODE BEGIN 1 */
+  s_reset_flags_snapshot = RCC->RSR;
+  __HAL_RCC_CLEAR_RESET_FLAGS();
 
   /* USER CODE END 1 */
 
@@ -100,6 +104,14 @@ int main(void)
   MX_SPI4_Init();
   /* USER CODE BEGIN 2 */
   User_Main_Init();
+  Debug_BlockingPrintf("[BOOT] reset_flags=0x%08lx (PIN=%u POR=%u SFT=%u IWDG=%u WWDG=%u LPWR=%u)\r\n",
+                       (unsigned long)s_reset_flags_snapshot,
+                       (unsigned)((s_reset_flags_snapshot & RCC_RSR_PINRSTF)  ? 1U : 0U),
+                       (unsigned)((s_reset_flags_snapshot & RCC_RSR_PORRSTF)  ? 1U : 0U),
+                       (unsigned)((s_reset_flags_snapshot & RCC_RSR_SFTRSTF)  ? 1U : 0U),
+                       (unsigned)((s_reset_flags_snapshot & RCC_RSR_IWDG1RSTF)? 1U : 0U),
+                       (unsigned)((s_reset_flags_snapshot & RCC_RSR_WWDG1RSTF)? 1U : 0U),
+                       (unsigned)((s_reset_flags_snapshot & RCC_RSR_LPWRRSTF) ? 1U : 0U));
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -339,6 +351,7 @@ void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
   /* User can add his own implementation to report the HAL error return state */
+  Debug_PanicPrintf("[PANIC] Error_Handler\r\n");
   __disable_irq();
   while (1)
   {

@@ -6,7 +6,7 @@
  *   位周期  = 800 ticks = 3.333 us
  *   Bit 1   = 600 ticks，75%  高电平
  *   Bit 0   = 300 ticks，37.5% 高电平
- *   复位帧  =   0 ticks，0%   输出保持低（DShot 帧间空闲）
+ *   拖尾空闲 = 若干槽 CCR=0，每槽 1 位时（≈3.33µs）保持低，拉长帧间线空闲
  *
  * 帧格式（16 bits, MSB first）：
  *   [15:5]  11-bit 油门值  0=停转，48..2047=调速范围
@@ -34,8 +34,15 @@
 #define DSHOT300_ARR     799U   /* ARR=800-1；位周期=800/240MHz=3.333us */
 #define DSHOT300_BIT1    600U   /* 75%  高电平 -> Bit 1 */
 #define DSHOT300_BIT0    300U   /* 37.5% 高电平 -> Bit 0 */
-#define DSHOT_FRAME_BITS  16U
-#define DSHOT_FRAME_LEN  (DSHOT_FRAME_BITS + 1U)  /* 16位帧 + 1位复位帧 */
+#define DSHOT_FRAME_BITS         16U
+#define DSHOT_TRAILING_LOW_SLOTS 3U   /* 16 位后连续全低槽数（≈3×3.33µs，与 BF 18 字档同级并略长） */
+#define DSHOT_FRAME_LEN  (DSHOT_FRAME_BITS + DSHOT_TRAILING_LOW_SLOTS)
+#define TIM2_TX_PSC       0U
+#define TIM2_TX_ARR       DSHOT300_ARR
+#define TIM2_RX_PSC       23U        /* 240MHz / (23+1) = 10MHz -> 0.1us/tick */
+#define TIM2_RX_ARR       0xFFFFFFFFU
+#define ESC_RX_MAX_EDGES  48U
+#define ESC_RX_TIMEOUT_MS 2U
 
 /* DMA 缓冲字节数，向上取整到 32 字节（D-Cache 行大小）*/
 #define DSHOT_BUF_BYTES  (((DSHOT_FRAME_LEN * sizeof(uint32_t)) + 31U) & ~31U)
@@ -63,8 +70,31 @@ static uint8_t  s_pending_tel[ESC_CH_COUNT];
 static ESC_DebugInfo_t  s_dbg;
 static volatile uint8_t s_dma_busy;
 
-#define DMA_BUSY_CH3  0x01U
-#define DMA_BUSY_CH4  0x02U
+#define DMA_BUSY_CH3_TX  0x01U
+#define DMA_BUSY_CH4_TX  0x02U
+#define DMA_BUSY_CH3_RX  0x04U
+#define DMA_BUSY_CH4_RX  0x08U
+
+/* 双通道 TX：HAL_TIM_PWM_Stop_DMA 会 __HAL_TIM_DISABLE 整颗定时器，先完成的一路会掐死另一路 DMA */
+#define ESC_TX_DMA_DONE_CH3  0x01U
+#define ESC_TX_DMA_DONE_CH4  0x02U
+static volatile uint8_t s_esc_tx_dma_done_bits;
+static volatile uint8_t s_esc_tx_expect_mask; /* 本帧实际启动的 TX DMA 通道，用于与 done_bits 对齐后关 TIM */
+
+typedef struct {
+    uint32_t edge_dt[ESC_RX_MAX_EDGES];
+    uint8_t edge_count;
+    uint8_t active;
+    uint8_t has_first_capture;
+    uint32_t last_capture;
+    uint32_t start_ms;
+} ESC_RxState_t;
+
+static ESC_RxState_t s_rx[ESC_CH_COUNT];
+static ESC_Telemetry_t s_telem[ESC_CH_COUNT];
+static uint8_t s_rx_start_pending;
+static ESC_Command_t s_service_cmd[ESC_CH_COUNT];
+static ESC_ServiceState_t s_service_state[ESC_CH_COUNT];
 
 /* ─────────────────── 空闲态强制拉低（非反转 DShot） ───────────────────
  * 说明：
@@ -112,6 +142,221 @@ static inline void ESC_PinsToAF_TIM2_CH3_CH4(void)
                  |  ((2U << (2U * 2U)) | (2U << (3U * 2U)));
 }
 
+static void ESC_Tim2ConfigTx(void)
+{
+    s_htim2.Instance->CR1 &= ~TIM_CR1_CEN;
+    s_htim2.Instance->PSC  = TIM2_TX_PSC;
+    s_htim2.Instance->ARR  = TIM2_TX_ARR;
+    s_htim2.Instance->EGR  = TIM_EGR_UG;
+}
+
+static void ESC_Tim2ConfigRx(void)
+{
+    s_htim2.Instance->CR1 &= ~TIM_CR1_CEN;
+    s_htim2.Instance->PSC  = TIM2_RX_PSC;
+    s_htim2.Instance->ARR  = TIM2_RX_ARR;
+    s_htim2.Instance->EGR  = TIM_EGR_UG;
+    s_htim2.Instance->CNT  = 0U;
+}
+
+static uint8_t gcr5b_to_nibble(uint8_t code)
+{
+    switch (code) {
+        case 0x19: return 0x0;
+        case 0x1B: return 0x1;
+        case 0x12: return 0x2;
+        case 0x13: return 0x3;
+        case 0x1D: return 0x4;
+        case 0x15: return 0x5;
+        case 0x16: return 0x6;
+        case 0x17: return 0x7;
+        case 0x1A: return 0x8;
+        case 0x09: return 0x9;
+        case 0x0A: return 0xA;
+        case 0x0B: return 0xB;
+        case 0x1E: return 0xC;
+        case 0x0D: return 0xD;
+        case 0x0E: return 0xE;
+        case 0x0F: return 0xF;
+        default:   return 0xFF;
+    }
+}
+
+static uint8_t esc_crc4_calc(uint16_t data12)
+{
+    uint8_t n0 = (uint8_t)(data12 & 0x0FU);
+    uint8_t n1 = (uint8_t)((data12 >> 4U) & 0x0FU);
+    uint8_t n2 = (uint8_t)((data12 >> 8U) & 0x0FU);
+    return (uint8_t)((n0 ^ n1 ^ n2) & 0x0FU);
+}
+
+static bool ESC_DecodeTelemetryFromEdges(const ESC_RxState_t *rx, ESC_Telemetry_t *out)
+{
+    uint8_t bits[40];
+    uint8_t bit_count = 0U;
+    uint8_t level = 1U;
+    uint32_t min_dt = 0xFFFFFFFFU;
+
+    if (rx->edge_count < 6U) {
+        return false;
+    }
+
+    for (uint8_t i = 0U; i < rx->edge_count; i++) {
+        uint32_t dt = rx->edge_dt[i];
+        if (dt > 0U && dt < min_dt) {
+            min_dt = dt;
+        }
+    }
+    if (min_dt == 0xFFFFFFFFU || min_dt == 0U) {
+        return false;
+    }
+
+    for (uint8_t i = 0U; i < rx->edge_count && bit_count < 40U; i++) {
+        uint32_t dt = rx->edge_dt[i];
+        uint32_t repeat = (dt + (min_dt / 2U)) / min_dt;
+        if (repeat < 1U) { repeat = 1U; }
+        if (repeat > 4U) { repeat = 4U; }
+        for (uint32_t k = 0U; k < repeat && bit_count < 40U; k++) {
+            bits[bit_count++] = level;
+        }
+        level ^= 1U;
+    }
+
+    if (bit_count < 20U) {
+        return false;
+    }
+
+    uint16_t raw16 = 0U;
+    for (uint8_t group = 0U; group < 4U; group++) {
+        uint8_t code = 0U;
+        for (uint8_t b = 0U; b < 5U; b++) {
+            code = (uint8_t)((code << 1U) | bits[group * 5U + b]);
+        }
+        uint8_t nibble = gcr5b_to_nibble(code);
+        if (nibble > 0x0F) {
+            return false;
+        }
+        raw16 = (uint16_t)((raw16 << 4U) | nibble);
+    }
+
+    {
+        uint16_t data12 = (uint16_t)(raw16 >> 4U);
+        uint8_t crc_rx = (uint8_t)(raw16 & 0x0FU);
+        uint8_t crc = esc_crc4_calc(data12);
+        out->raw_word = raw16;
+        out->data_12bit = data12;
+        out->crc = crc_rx;
+        out->crc_ok = (uint8_t)((crc_rx == crc) || (crc_rx == ((uint8_t)(~crc) & 0x0FU)));
+        out->valid = out->crc_ok ? 1U : 0U;
+        out->edge_count = rx->edge_count;
+        out->timestamp_ms = HAL_GetTick();
+        out->updated = 1U;
+        return (out->valid != 0U);
+    }
+}
+
+static void ESC_StopRxChannel(ESC_Channel_t ch)
+{
+    uint32_t tim_ch = (ch == ESC_CH1) ? TIM_CHANNEL_3 : TIM_CHANNEL_4;
+    (void)HAL_TIM_IC_Stop_IT(&s_htim2, tim_ch);
+    s_rx[ch].active = 0U;
+    if (ch == ESC_CH1) {
+        s_dma_busy &= (uint8_t)~DMA_BUSY_CH3_RX;
+        ESC_PinToGpioLow_PA2();
+    } else {
+        s_dma_busy &= (uint8_t)~DMA_BUSY_CH4_RX;
+        ESC_PinToGpioLow_PA3();
+    }
+    s_dbg.dma_busy = s_dma_busy;
+}
+
+static void ESC_FinishRxChannel(ESC_Channel_t ch)
+{
+    ESC_Telemetry_t telem = {0};
+    (void)ESC_DecodeTelemetryFromEdges(&s_rx[ch], &telem);
+    s_telem[ch] = telem;
+    ESC_StopRxChannel(ch);
+}
+
+static void ESC_StartRxChannel(ESC_Channel_t ch)
+{
+    TIM_IC_InitTypeDef ic = {0};
+    uint32_t tim_ch = (ch == ESC_CH1) ? TIM_CHANNEL_3 : TIM_CHANNEL_4;
+
+    memset(&s_rx[ch], 0, sizeof(s_rx[ch]));
+    s_rx[ch].active = 1U;
+    s_rx[ch].start_ms = HAL_GetTick();
+
+    ic.ICPolarity  = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;
+    ic.ICSelection = TIM_ICSELECTION_DIRECTTI;
+    ic.ICPrescaler = TIM_ICPSC_DIV1;
+    ic.ICFilter    = 0U;
+    (void)HAL_TIM_IC_ConfigChannel(&s_htim2, &ic, tim_ch);
+    (void)HAL_TIM_IC_Start_IT(&s_htim2, tim_ch);
+
+    if (ch == ESC_CH1) {
+        s_dma_busy |= DMA_BUSY_CH3_RX;
+    } else {
+        s_dma_busy |= DMA_BUSY_CH4_RX;
+    }
+    s_dbg.dma_busy = s_dma_busy;
+}
+
+static void ESC_StartPendingRxIfReady(void)
+{
+    if ((s_dma_busy & (DMA_BUSY_CH3_TX | DMA_BUSY_CH4_TX)) != 0U) {
+        return;
+    }
+    if (s_rx_start_pending == 0U) {
+        return;
+    }
+
+    ESC_Tim2ConfigRx();
+    ESC_PinsToAF_TIM2_CH3_CH4();
+
+    if (s_rx_start_pending & DMA_BUSY_CH3_RX) {
+        ESC_StartRxChannel(ESC_CH1);
+    }
+    if (s_rx_start_pending & DMA_BUSY_CH4_RX) {
+        ESC_StartRxChannel(ESC_CH2);
+    }
+    s_rx_start_pending = 0U;
+}
+
+/**
+ * 仅关闭单路 PWM+DMA，不执行 __HAL_TIM_DISABLE。
+ * HAL_TIM_PWM_Stop_DMA() 会在任一路回调里关掉整颗 TIM，另一路 DMA 无法跑完。
+ */
+static void ESC_TimPwmStopDmaOneChKeepTimRunning(TIM_HandleTypeDef *htim, uint32_t Channel)
+{
+    switch (Channel) {
+        case TIM_CHANNEL_3:
+            __HAL_TIM_DISABLE_DMA(htim, TIM_DMA_CC3);
+            (void)HAL_DMA_Abort_IT(htim->hdma[TIM_DMA_ID_CC3]);
+            break;
+        case TIM_CHANNEL_4:
+            __HAL_TIM_DISABLE_DMA(htim, TIM_DMA_CC4);
+            (void)HAL_DMA_Abort_IT(htim->hdma[TIM_DMA_ID_CC4]);
+            break;
+        default:
+            return;
+    }
+    TIM_CCxChannelCmd(htim->Instance, Channel, TIM_CCx_DISABLE);
+    if (IS_TIM_BREAK_INSTANCE(htim->Instance) != RESET) {
+        __HAL_TIM_MOE_DISABLE(htim);
+    }
+}
+
+static void ESC_Tim2DisableCounterIfTxDmaDoneMatchesExpect(void)
+{
+    if (s_esc_tx_expect_mask != 0U &&
+        (s_esc_tx_dma_done_bits == s_esc_tx_expect_mask)) {
+        __HAL_TIM_DISABLE(&s_htim2);
+        s_esc_tx_dma_done_bits = 0U;
+        s_esc_tx_expect_mask    = 0U;
+    }
+}
+
 /* ════════════════════════════════════════════════════════════════
  * 内部：编码一帧 DShot 到 DMA 缓冲
  *   帧格式：[15:5]=throttle  [4]=telemetry  [3:0]=CRC
@@ -126,7 +371,9 @@ static void encode_frame(uint32_t *buf, uint16_t throttle, bool telemetry)
         buf[i] = (frame & 0x8000U) ? DSHOT300_BIT1 : DSHOT300_BIT0;
         frame  = (uint16_t)(frame << 1U);
     }
-    buf[DSHOT_FRAME_BITS] = 0U;  /* 复位帧：CCR=0 -> 输出保持低电平 */
+    for (uint32_t i = DSHOT_FRAME_BITS; i < DSHOT_FRAME_LEN; i++) {
+        buf[i] = 0U;  /* 拖尾：CCR=0，线保持低 */
+    }
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -187,6 +434,8 @@ void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
     HAL_NVIC_EnableIRQ(DMA1_Stream0_IRQn);
     HAL_NVIC_SetPriority(DMA1_Stream1_IRQn, 5, 0);
     HAL_NVIC_EnableIRQ(DMA1_Stream1_IRQn);
+    HAL_NVIC_SetPriority(TIM2_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(TIM2_IRQn);
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -204,6 +453,11 @@ void DMA1_Stream1_IRQHandler(void)
     HAL_DMA_IRQHandler(&s_hdma_ch4);
 }
 
+void TIM2_IRQHandler(void)
+{
+    HAL_TIM_IRQHandler(&s_htim2);
+}
+
 /* ════════════════════════════════════════════════════════════════
  * HAL 回调：DMA 传输完成
  *
@@ -213,11 +467,7 @@ void DMA1_Stream1_IRQHandler(void)
  *        -> 将通道 ChannelState 置为 READY（DMA_NORMAL 模式）
  *        -> 本函数
  *
- * 本函数再调用 HAL_TIM_PWM_Stop_DMA：
- *   - 清除 TIM_DIER 中的 CCxDE（禁止 DMA 请求）
- *   - 禁用 CCx 输出（引脚回到低电平 = DShot 空闲态）
- *   - 双通道：先完成的通道停止后另一通道仍使能，__HAL_TIM_DISABLE 无效；
- *             最后完成的通道停止后所有通道禁用，计数器随之停止
+ * 双通道 TX：每路完成时只关本路 DMA/CC，两路都完成后再 __HAL_TIM_DISABLE（见上）。
  * ════════════════════════════════════════════════════════════════ */
 void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 {
@@ -225,16 +475,29 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 
     if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3) {
         s_dbg.pulse_done_ch3_count++;
-        HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_3);
-        ESC_PinToGpioLow_PA2();
-        s_dma_busy &= (uint8_t)~DMA_BUSY_CH3;
+        ESC_TimPwmStopDmaOneChKeepTimRunning(htim, TIM_CHANNEL_3);
+        s_dma_busy &= (uint8_t)~DMA_BUSY_CH3_TX;
+        s_esc_tx_dma_done_bits |= ESC_TX_DMA_DONE_CH3;
+        ESC_Tim2DisableCounterIfTxDmaDoneMatchesExpect();
+        if (s_pending_tel[ESC_CH1]) {
+            s_rx_start_pending |= DMA_BUSY_CH3_RX;
+        } else {
+            ESC_PinToGpioLow_PA2();
+        }
     }
     if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4) {
         s_dbg.pulse_done_ch4_count++;
-        HAL_TIM_PWM_Stop_DMA(htim, TIM_CHANNEL_4);
-        ESC_PinToGpioLow_PA3();
-        s_dma_busy &= (uint8_t)~DMA_BUSY_CH4;
+        ESC_TimPwmStopDmaOneChKeepTimRunning(htim, TIM_CHANNEL_4);
+        s_dma_busy &= (uint8_t)~DMA_BUSY_CH4_TX;
+        s_esc_tx_dma_done_bits |= ESC_TX_DMA_DONE_CH4;
+        ESC_Tim2DisableCounterIfTxDmaDoneMatchesExpect();
+        if (s_pending_tel[ESC_CH2]) {
+            s_rx_start_pending |= DMA_BUSY_CH4_RX;
+        } else {
+            ESC_PinToGpioLow_PA3();
+        }
     }
+    ESC_StartPendingRxIfReady();
     s_dbg.dma_busy = s_dma_busy;
 }
 
@@ -243,6 +506,51 @@ void HAL_TIM_PWM_PulseFinishedHalfCpltCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance != TIM2) { return; }
     if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3) { s_dbg.pulse_half_ch3_count++; }
     if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4) { s_dbg.pulse_half_ch4_count++; }
+}
+
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+    ESC_Channel_t ch;
+    uint32_t cap;
+    ESC_RxState_t *rx;
+    uint32_t dt;
+
+    if (htim->Instance != TIM2) { return; }
+    if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_3) {
+        ch = ESC_CH1;
+        cap = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_3);
+    } else if (htim->Channel == HAL_TIM_ACTIVE_CHANNEL_4) {
+        ch = ESC_CH2;
+        cap = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_4);
+    } else {
+        return;
+    }
+
+    rx = &s_rx[ch];
+    if (!rx->active) {
+        return;
+    }
+
+    if (!rx->has_first_capture) {
+        rx->has_first_capture = 1U;
+        rx->last_capture = cap;
+        return;
+    }
+
+    dt = cap - rx->last_capture;
+    rx->last_capture = cap;
+
+    if (rx->edge_count < ESC_RX_MAX_EDGES) {
+        rx->edge_dt[rx->edge_count] = dt;
+        rx->edge_count++;
+    } else {
+        ESC_FinishRxChannel(ch);
+        return;
+    }
+
+    if (dt > 120U && rx->edge_count > 8U) { /* 10MHz 下约 12us，视为回传结束间隔 */
+        ESC_FinishRxChannel(ch);
+    }
 }
 
 void HAL_TIM_ErrorCallback(TIM_HandleTypeDef *htim)
@@ -261,7 +569,14 @@ ESC_Status_t ESC_Init(void)
     memset(s_buf_ch4,     0, sizeof(s_buf_ch4));
     memset(s_pending_val, 0, sizeof(s_pending_val));
     memset(s_pending_tel, 0, sizeof(s_pending_tel));
+    memset(s_rx,          0, sizeof(s_rx));
+    memset(s_telem,       0, sizeof(s_telem));
+    memset(s_service_cmd,   0, sizeof(s_service_cmd));
+    memset(s_service_state, 0, sizeof(s_service_state));
+    s_rx_start_pending = 0U;
     s_dma_busy = 0U;
+    s_esc_tx_dma_done_bits = 0U;
+    s_esc_tx_expect_mask    = 0U;
 
     /* TIM2：Prescaler=0 -> 计数频率=240MHz，ARR=799 -> 位周期=3.333us */
     s_htim2.Instance               = TIM2;
@@ -284,6 +599,7 @@ ESC_Status_t ESC_Init(void)
         HAL_TIM_PWM_ConfigChannel(&s_htim2, &oc, TIM_CHANNEL_4) != HAL_OK) {
         return ESC_ERR_HAL;
     }
+    ESC_Tim2ConfigTx();
 
     /* 确保上电后空闲态为低电平 */
     ESC_PinToGpioLow_PA2();
@@ -358,6 +674,11 @@ ESC_Status_t ESC_SetThrottleRaw(ESC_Channel_t ch, uint16_t dshot_value, bool req
 
 ESC_Status_t ESC_SetThrottleBidirectional(ESC_Channel_t ch, int16_t throttle)
 {
+    return ESC_SetThrottleBidirectionalEx(ch, throttle, false);
+}
+
+ESC_Status_t ESC_SetThrottleBidirectionalEx(ESC_Channel_t ch, int16_t throttle, bool request_telemetry)
+{
     uint16_t dshot_val;
     if (throttle <= 0) {
         dshot_val = 0U;
@@ -367,7 +688,7 @@ ESC_Status_t ESC_SetThrottleBidirectional(ESC_Channel_t ch, int16_t throttle)
         /* 1..1000 线性映射 -> DShot 48..2047 */
         dshot_val = (uint16_t)(48U + (t - 1U) * (2047U - 48U) / 999U);
     }
-    return ESC_SetThrottleRaw(ch, dshot_val, false);
+    return ESC_SetThrottleRaw(ch, dshot_val, request_telemetry);
 }
 
 ESC_Status_t ESC_SetInputMapped(ESC_Channel_t ch, uint16_t input_value)
@@ -391,6 +712,21 @@ ESC_Status_t ESC_Update(void)
     if (s_dma_busy) {
         s_dbg.update_busy_reject_count++;
         return ESC_ERR_BUSY;
+    }
+    s_rx_start_pending = 0U;
+    s_esc_tx_dma_done_bits = 0U;
+    s_esc_tx_expect_mask    = 0U;
+
+    ESC_Tim2ConfigTx();
+
+    {
+        TIM_OC_InitTypeDef oc = {0};
+        oc.OCMode     = TIM_OCMODE_PWM1;
+        oc.Pulse      = 0U;
+        oc.OCPolarity = TIM_OCPOLARITY_HIGH;
+        oc.OCFastMode = TIM_OCFAST_DISABLE;
+        (void)HAL_TIM_PWM_ConfigChannel(&s_htim2, &oc, TIM_CHANNEL_3);
+        (void)HAL_TIM_PWM_ConfigChannel(&s_htim2, &oc, TIM_CHANNEL_4);
     }
 
     /* 每次发送前恢复为 TIM2 复用输出（上一次发送完成后会被切回 GPIO 低电平） */
@@ -418,7 +754,8 @@ ESC_Status_t ESC_Update(void)
     /* 启动 DMA — CH3 (PA2) */
     if (HAL_TIM_PWM_Start_DMA(&s_htim2, TIM_CHANNEL_3,
                                s_buf_ch3, DSHOT_FRAME_LEN) == HAL_OK) {
-        s_dma_busy |= DMA_BUSY_CH3;
+        s_dma_busy |= DMA_BUSY_CH3_TX;
+        s_esc_tx_expect_mask |= ESC_TX_DMA_DONE_CH3;
     } else {
         s_dbg.start_dma_ch3_fail_count++;
     }
@@ -426,7 +763,8 @@ ESC_Status_t ESC_Update(void)
     /* 启动 DMA — CH4 (PA3)：ChannelState[3] 与 ChannelState[2] 独立，无冲突 */
     if (HAL_TIM_PWM_Start_DMA(&s_htim2, TIM_CHANNEL_4,
                                s_buf_ch4, DSHOT_FRAME_LEN) == HAL_OK) {
-        s_dma_busy |= DMA_BUSY_CH4;
+        s_dma_busy |= DMA_BUSY_CH4_TX;
+        s_esc_tx_expect_mask |= ESC_TX_DMA_DONE_CH4;
     } else {
         s_dbg.start_dma_ch4_fail_count++;
     }
@@ -444,6 +782,91 @@ bool ESC_IsBusy(void)
 void ESC_GetDebugInfo(ESC_DebugInfo_t *info)
 {
     if (info != NULL) { *info = s_dbg; }
+}
+
+bool ESC_GetTelemetry(ESC_Channel_t ch, ESC_Telemetry_t *out)
+{
+    if (ch >= ESC_CH_COUNT || out == NULL) {
+        return false;
+    }
+    *out = s_telem[ch];
+    s_telem[ch].updated = 0U;
+    return (out->valid != 0U);
+}
+
+void ESC_Service_Init(void)
+{
+    for (uint8_t ch = 0U; ch < ESC_CH_COUNT; ch++) {
+        s_service_cmd[ch].throttle = 0;
+        s_service_cmd[ch].request_telemetry = 0U;
+        s_service_state[ch].initialized = 1U;
+        s_service_state[ch].last_update_ok = 1U;
+    }
+}
+
+ESC_Status_t ESC_Service_WriteCommand(ESC_Channel_t ch, int16_t throttle, bool request_telemetry)
+{
+    if (ch >= ESC_CH_COUNT) {
+        return ESC_ERR_PARAM;
+    }
+    if (throttle < 0) {
+        throttle = 0;
+    } else if (throttle > 1000) {
+        throttle = 1000;
+    }
+    s_service_cmd[ch].throttle = throttle;
+    s_service_cmd[ch].request_telemetry = request_telemetry ? 1U : 0U;
+    return ESC_OK;
+}
+
+void ESC_Service_Tick(void)
+{
+    ESC_Status_t st = ESC_OK;
+
+    for (uint8_t ch = 0U; ch < ESC_CH_COUNT; ch++) {
+        s_service_state[ch].tick_count++;
+        st = ESC_SetThrottleBidirectionalEx((ESC_Channel_t)ch,
+                                            s_service_cmd[ch].throttle,
+                                            (s_service_cmd[ch].request_telemetry != 0U));
+        if (st != ESC_OK) {
+            s_service_state[ch].last_update_ok = 0U;
+            s_service_state[ch].update_err_count++;
+        }
+    }
+
+    ESC_RecoverIfStuck(2U);
+    if (!ESC_IsBusy()) {
+        st = ESC_Update();
+        for (uint8_t ch = 0U; ch < ESC_CH_COUNT; ch++) {
+            if (st == ESC_OK) {
+                s_service_state[ch].last_update_ok = 1U;
+                s_service_state[ch].update_ok_count++;
+            } else {
+                s_service_state[ch].last_update_ok = 0U;
+                s_service_state[ch].update_err_count++;
+            }
+        }
+    }
+
+    for (uint8_t ch = 0U; ch < ESC_CH_COUNT; ch++) {
+        ESC_Telemetry_t t;
+        if (ESC_GetTelemetry((ESC_Channel_t)ch, &t) && t.updated) {
+            s_service_state[ch].last_telemetry = t;
+            s_service_state[ch].rx_ok_count++;
+        } else if (t.updated) {
+            s_service_state[ch].last_telemetry = t;
+            s_service_state[ch].rx_err_count++;
+        }
+    }
+}
+
+bool ESC_Service_ReadState(ESC_Channel_t ch, ESC_ServiceState_t *out)
+{
+    if (ch >= ESC_CH_COUNT || out == NULL) {
+        return false;
+    }
+    *out = s_service_state[ch];
+    return true;
 }
 
 void ESC_RecoverIfStuck(uint32_t timeout_ms)
@@ -465,9 +888,20 @@ void ESC_RecoverIfStuck(uint32_t timeout_ms)
         /* 强制停止：清 CCxDE、中止 DMA、禁用通道输出、关闭计数器 */
         HAL_TIM_PWM_Stop_DMA(&s_htim2, TIM_CHANNEL_3);
         HAL_TIM_PWM_Stop_DMA(&s_htim2, TIM_CHANNEL_4);
-        s_dma_busy            = 0U;
-        s_dbg.dma_busy        = 0U;
+        ESC_StopRxChannel(ESC_CH1);
+        ESC_StopRxChannel(ESC_CH2);
+        s_rx_start_pending       = 0U;
+        s_esc_tx_dma_done_bits   = 0U;
+        s_esc_tx_expect_mask     = 0U;
+        s_dma_busy               = 0U;
+        s_dbg.dma_busy           = 0U;
         s_dbg.stuck_recover_count++;
-        s_stuck_since_ms      = 0U;
+        s_stuck_since_ms         = 0U;
+    }
+
+    for (uint8_t ch = 0U; ch < ESC_CH_COUNT; ch++) {
+        if (s_rx[ch].active && (now - s_rx[ch].start_ms) >= ESC_RX_TIMEOUT_MS) {
+            ESC_FinishRxChannel((ESC_Channel_t)ch);
+        }
     }
 }

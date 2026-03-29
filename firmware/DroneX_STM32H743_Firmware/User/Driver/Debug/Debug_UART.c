@@ -14,6 +14,7 @@
 
 #define DEBUG_UART_TX_BUF_SIZE  DEBUG_MSG_MAX_LEN
 #define DEBUG_UART_RX_BUF_SIZE  256
+#define DEBUG_UART_BLOCKING_TIMEOUT_MS  50U
 
 /* DMA TX 缓冲区：AHB SRAM 0x30000000（D2 域 DMA 可访问）。MPU Region1 已置为非 cache。 */
 __attribute__((at(0x30000000))) __attribute__((aligned(32)))
@@ -52,7 +53,7 @@ int Debug_Transport_IsReady(void)
 uint32_t Debug_Transport_BlockingSend(const uint8_t *data, uint32_t len)
 {
     if (data == NULL || len == 0) return 0;
-    if (HAL_UART_Transmit(&huart1, (uint8_t *)data, (uint16_t)len, HAL_MAX_DELAY) != HAL_OK)
+    if (HAL_UART_Transmit(&huart1, (uint8_t *)data, (uint16_t)len, DEBUG_UART_BLOCKING_TIMEOUT_MS) != HAL_OK)
         return 0;
     return len;
 }

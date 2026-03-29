@@ -69,6 +69,9 @@ CompileFlags:
     - -D"__OPTIMIZE_SIZE__=1"
     - -D"__OPT_SMALL_ASSERT=1"
     - -D"__OPTIMISE_LEVEL=2"
+    - -I"d:\Software\Keil\ARM\ARMCC\include"
+    - -I"d:\Software\Keil\ARM\ARMCC\include\rw"
+    - -D"__ARMCC_VERSION=5060020"
   Remove: []
   CompilationDatabase: ./build/DroneX_STM32H743_Firmware
 Diagnostics:

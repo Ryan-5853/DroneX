@@ -17,21 +17,9 @@
 #include "Driver/ESC/ESC.h"
 #include "Driver/RC/RC.h"
 #include "Driver/Vector_Gimbal/Vector_Gimbal.h"
+#include "System/System_Manager.h"
 #include "main.h"
 #include "stm32h7xx_hal.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-
-/* 临时硬件自检：1=仅翻转 PA2，0=正常业务逻辑 */
-#define PA2_TOGGLE_TEST_ONLY  0
-/* 调试期原始 DShot 阶梯测试（建议拆桨后使用） */
-#define ESC_RAMP_STEP0_RAW      300U
-#define ESC_RAMP_STEP1_RAW      500U
-#define ESC_RAMP_STEP2_RAW      700U
-#define ESC_RAMP_STEP_MS       1000U
-#define ESC_RAMP_ZERO_TAIL_MS  2000U
-#define ESC_ARM_ZERO_MS         3000U
 
 /* 陀螺仪1 句柄与配置 */
 static IMU_Handle_t     s_imu1_handle;
@@ -39,94 +27,42 @@ static ICM42688_SPI_Config_t s_imu1_cfg;
 /* 陀螺仪2 句柄与配置 */
 static IMU_Handle_t     s_imu2_handle;
 static ICM42688_SPI_Config_t s_imu2_cfg;
-static volatile uint8_t s_esc_dbg_report_flag;
-static uint32_t s_esc_arm_start_ms;
-static uint8_t s_esc_test_state;      /* 0=arming, 1=ramp */
-static uint16_t s_esc_test_raw;
-
-/* VOFA+ 上位机动力参数：串口解析 "power:N" 更新，0=停转，1..1000=动力档，由 ESC_1kHz_Task 按原频率打包 DShot 发送 */
-static volatile uint16_t s_power_from_uart = 0U;
-#define POWER_UART_MAX  1000U
-static uint32_t s_rc_last_print_ms = 0U;
 static int16_t s_gimbol_cmd0 = 0;
 static int16_t s_gimbol_cmd1 = 0;
+/* 共轴反桨：两路电机共用同一 RC 油门通道（当前为 ch[2]，即遥控显示 CH3） */
+static volatile int16_t s_esc_coax_throttle = 0;
+static uint32_t s_esc_print_ms = 0;
+#if ESC_LOG_DSHOT
+static uint32_t s_dshot_log_last_ok;
+static uint32_t s_dshot_log_last_rej;
+static uint8_t  s_dshot_log_inited;
+#endif
 
-/* ESC 周期发送任务：发送频率不变，油门值来自串口解析的 s_power_from_uart（power:0..1000），打包 DShot 发送 */
-static void ESC_1kHz_Task(void)
+/* RC 通道归一化值 -1000..1000 映射到 ESC 油门 0..300（30%） */
+static int16_t MapRcToEsc30Percent(int16_t rc_norm)
 {
-    uint16_t p = s_power_from_uart;
-    uint16_t raw;
-
-    if (p == 0U) {
-        raw = 0U;
-    } else {
-        /* 1..1000 线性映射到 DShot 48..2047 */
-        raw = (uint16_t)(48U + (uint32_t)(p - 1U) * (2047U - 48U) / (POWER_UART_MAX - 1U));
+    int32_t t = ((int32_t)rc_norm ) * 900 / 1000;
+    if (t < 0) {
+        t = 0;
+    } else if (t > 900) {
+        t = 900;
     }
-
-    (void)ESC_SetThrottleRaw(ESC_CH1, raw, false);
-    (void)ESC_SetThrottleRaw(ESC_CH2, raw, false);
-    ESC_RecoverIfStuck(2);
-    if (!ESC_IsBusy()) {
-        (void)ESC_Update();
-    }
+    return (int16_t)t;
 }
 
-static void ESC_DebugFlag_Task(void)
+/* ESC：同一油门值写入 CH1/CH2，映射到 30% 上限（PIT 周期见下方，与 DShot 标称帧率一致） */
+static void ESC_DShot_Task(void)
 {
-    s_esc_dbg_report_flag = 1U;
+    const RC_Signal_t *rc = RC_GetSignal();
+    s_esc_coax_throttle = MapRcToEsc30Percent(rc->ch[2]);
+    (void)ESC_Service_WriteCommand(ESC_CH1, s_esc_coax_throttle, false);
+    (void)ESC_Service_WriteCommand(ESC_CH2, s_esc_coax_throttle, false);
+    ESC_Service_Tick();
 }
 
-/** 自检：验证各模块初始化结果，并输出到 Debug */
-static void User_SelfCheck(void)
-{
-    IMU_Data_t imu_data;
-    int imu1_ok = (IMU_Read(&s_imu1_handle, &imu_data) == IMU_OK);
-    int imu2_ok = (IMU_Read(&s_imu2_handle, &imu_data) == IMU_OK);
-    // int sd_ok   = SD_IsReady();
-    uint32_t cy = Timing_GetCycles();
-    int timing_ok = (cy > 0);
-
-    Debug_Printf("=== SelfCheck ===\r\n");
-    Debug_Printf("  IMU1:  %s\r\n", imu1_ok ? "OK" : "FAIL");
-    Debug_Printf("  IMU2:  %s\r\n", imu2_ok ? "OK" : "FAIL");
-    // Debug_Printf("  SD:    %s\r\n", sd_ok ? "OK" : "FAIL");
-    Debug_Printf("  DWT:   %s\r\n", timing_ok ? "OK" : "FAIL");
-    Debug_Printf("  Tick:  %lu ms\r\n", (unsigned long)HAL_GetTick());
-    Debug_Printf("================\r\n");
-
-    /* 短暂轮询以尽量送出自检结果（非阻塞） */
-    // for (int i = 0; i < 50; i++) {
-    //     HAL_Delay(1);
-    //     Debug_Process();
-    // }
-}
-
-/** 解析 VOFA+ 控件格式 "power:N"，仅做数据更新，返回 1 表示已消费该行。
- *  有界解析：最多读 4 位数字，避免超长数字导致 strtol 或 Cmd 处理卡死。 */
-static int ParsePowerFromUart(const char *buf)
-{
-    if (buf == NULL) return 0;
-    if (strncmp(buf, "power:", 6) != 0) return 0;
-    const char *p = buf + 6;
-    while (*p == ' ' || *p == '\t') p++;
-    if (*p < '0' || *p > '9') return 0;
-    uint32_t val = 0U;
-    const int max_digits = 4;  /* 0..9999，之后 clamp 到 0..1000 */
-    for (int i = 0; i < max_digits && *p >= '0' && *p <= '9'; i++, p++)
-        val = val * 10U + (uint32_t)(*p - '0');
-    if (val > POWER_UART_MAX) val = POWER_UART_MAX;
-    s_power_from_uart = (uint16_t)val;
-    return 1;
-}
-
-/** Debug 层：Driver 拆包后的指令包回调，交由 Cmd 解析执行；先尝试解析 power:N 作为动力参数 */
+/** Debug 层：Driver 拆包后的指令包回调，交由 Cmd 解析执行 */
 static void Debug_OnLine(const char *buf)
 {
-    if (ParsePowerFromUart(buf)) {
-        /* 已作为动力参数更新，不再交给 Cmd，避免长行 "power:99999..." 进入 Cmd 缓冲区导致卡死 */
-        return;
-    }
     Cmd_Status_t ret = Cmd_Process(buf);
     if (ret == CMD_ERR_UNKNOWN)
         Debug_Printf("ERR unknown cmd:[%s]\r\n", buf);
@@ -200,14 +136,11 @@ void User_Main_Init(void)
     /* ESC 初始化：双向 DShot300（TIM2_CH3/CH4），上电先发送停转帧 */
     if (ESC_Init() == ESC_OK) {
         Debug_BlockingPrintf("ESC_Init OK\r\n");
-        (void)ESC_SetThrottleBidirectional(ESC_CH1, 0);
-        (void)ESC_SetThrottleBidirectional(ESC_CH2, 0);
-        (void)ESC_Update();
-        s_esc_arm_start_ms = HAL_GetTick();
-        s_esc_test_state = 0U;
-        s_esc_test_raw = 0U;
-        Debug_BlockingPrintf("ESC: throttle from UART power:0..%u (e.g. power:500), 1kHz DShot\r\n",
-            (unsigned)POWER_UART_MAX);
+        ESC_Service_Init();
+        // (void)ESC_SetThrottleBidirectional(ESC_CH1, 0);
+        // (void)ESC_SetThrottleBidirectional(ESC_CH2, 0);
+        // (void)ESC_Update();
+        HAL_Delay(1000);
     }
     else {
         Debug_BlockingPrintf("ESC_Init FAILED\r\n");
@@ -233,30 +166,14 @@ void User_Main_Init(void)
     if (PIT_Init(PIT_CH1, &pit_cfg) == PIT_OK)
         // PIT_Start(PIT_CH1);
 
-    /* 4kHz ESC 发送任务：提高油门帧连续性 */
-    pit_cfg.period_us = 2000;
+    /* DShot300 发送节拍：250us ≈ 4kHz（与常见飞控一致，高于原 500Hz） */
+    pit_cfg.period_us = 250;
     pit_cfg.priority  = 3;
-    pit_cfg.callback  = ESC_1kHz_Task;
+    pit_cfg.callback  = ESC_DShot_Task;
     if (PIT_Init(PIT_CH2, &pit_cfg) == PIT_OK)
         PIT_Start(PIT_CH2);
 
-    /* 5Hz ESC 调试标志任务：在主循环里打印状态，避免在中断里打印 */
-    pit_cfg.period_us = 1000000;
-    pit_cfg.priority  = 10;
-    pit_cfg.callback  = ESC_DebugFlag_Task;
-    if (PIT_Init(PIT_CH3, &pit_cfg) == PIT_OK)
-        PIT_Start(PIT_CH3);
-
-    /* 自检并输出结果 */
-    // User_SelfCheck();
-
-    // (void)ESC_SetThrottleBidirectional(ESC_CH1, 100);
-    // (void)ESC_Update();
-    // Debug_Printf("ESC_CH1 100\r\n");
-    // HAL_Delay(1000);
-    // (void)ESC_SetThrottleBidirectional(ESC_CH1, 0);
-    // (void)ESC_Update();
-    // Debug_Printf("ESC_CH1 0\r\n");
+    System_Manager_Init();
 }
 
 /**
@@ -264,56 +181,47 @@ void User_Main_Init(void)
  */
 void User_Main_Loop(void)
 {
+    uint32_t now = HAL_GetTick();
+    if ((now - s_esc_print_ms) >= 100U) {
+        s_esc_print_ms = now;
+        Debug_Printf("ESC coax both motors (ch3 map): %d\r\n",
+                     (int)s_esc_coax_throttle);
+#if ESC_LOG_DSHOT
+        {
+            ESC_DebugInfo_t di;
+            ESC_GetDebugInfo(&di);
+            if (!s_dshot_log_inited) {
+                s_dshot_log_inited   = 1U;
+                s_dshot_log_last_ok  = di.update_ok_count;
+                s_dshot_log_last_rej = di.update_busy_reject_count;
+            } else {
+                uint32_t d_ok  = di.update_ok_count - s_dshot_log_last_ok;
+                uint32_t d_rej = di.update_busy_reject_count - s_dshot_log_last_rej;
+                s_dshot_log_last_ok  = di.update_ok_count;
+                s_dshot_log_last_rej = di.update_busy_reject_count;
+                Debug_Printf(
+                    "DSHOT300 tx: +100ms ok=%lu busy_rej=%lu | cum pulse ch3/4=%lu/%lu stuck=%lu | last_raw=%u/%u dma=0x%02x\r\n",
+                    (unsigned long)d_ok,
+                    (unsigned long)d_rej,
+                    (unsigned long)di.pulse_done_ch3_count,
+                    (unsigned long)di.pulse_done_ch4_count,
+                    (unsigned long)di.stuck_recover_count,
+                    (unsigned)di.last_raw_ch1,
+                    (unsigned)di.last_raw_ch2,
+                    (unsigned)di.dma_busy);
+            }
+        }
+#endif
+    }
+
     const RC_Signal_t *rc = RC_GetSignal();
-    s_gimbol_cmd0 = (int16_t)((int32_t)rc->ch[0] * 10);
-    s_gimbol_cmd1 = (int16_t)((int32_t)rc->ch[1] * 10);
+    s_gimbol_cmd0 = (int16_t)((int32_t)rc->ch[0] * 3);
+    s_gimbol_cmd1 = (int16_t)((int32_t)rc->ch[1] * 3);
     (void)Vector_Gimbal_Set(VECTOR_GIMBAL_AXIS_0, s_gimbol_cmd0);
     (void)Vector_Gimbal_Set(VECTOR_GIMBAL_AXIS_1, s_gimbol_cmd1);
 
-    uint32_t now = HAL_GetTick();
-    if ((now - s_rc_last_print_ms) >= 100U) {
-        s_rc_last_print_ms = now;
-        Debug_Printf(
-            "RC MAP %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d | gmb=%d,%d ch17=%u ch18=%u on=%u lost=%u fs=%u cnt=%lu",
-            (int)rc->ch[0],  (int)rc->ch[1],  (int)rc->ch[2],  (int)rc->ch[3],
-            (int)rc->ch[4],  (int)rc->ch[5],  (int)rc->ch[6],  (int)rc->ch[7],
-            (int)rc->ch[8],  (int)rc->ch[9],  (int)rc->ch[10], (int)rc->ch[11],
-            (int)rc->ch[12], (int)rc->ch[13], (int)rc->ch[14], (int)rc->ch[15],
-            (int)s_gimbol_cmd0, (int)s_gimbol_cmd1,
-            (unsigned)rc->ch17, (unsigned)rc->ch18, (unsigned)rc->is_online,
-            (unsigned)rc->frame_lost, (unsigned)rc->failsafe, (unsigned long)rc->frame_count);
-    }
-
-    // if (s_esc_dbg_report_flag) {
-    //     ESC_DebugInfo_t info;
-    //     s_esc_dbg_report_flag = 0U;
-    //     ESC_GetDebugInfo(&info);
-    //     Debug_Printf("ESC DBG init=%u busy=%u msp=%lu upd_req=%lu upd_ok=%lu busy_rej=%lu fail3=%lu fail4=%lu done3=%lu done4=%lu irq3=%lu irq4=%lu raw1=%u raw2=%u\r\n",
-    //         (unsigned)info.initialized,
-    //         (unsigned)info.dma_busy,
-    //         (unsigned long)info.msp_init_count,
-    //         (unsigned long)info.update_req_count,
-    //         (unsigned long)info.update_ok_count,
-    //         (unsigned long)info.update_busy_reject_count,
-    //         (unsigned long)info.start_dma_ch3_fail_count,
-    //         (unsigned long)info.start_dma_ch4_fail_count,
-    //         (unsigned long)info.pulse_done_ch3_count,
-    //         (unsigned long)info.pulse_done_ch4_count,
-    //         (unsigned long)info.dma_irq_ch3_count,
-    //         (unsigned long)info.dma_irq_ch4_count,
-    //         (unsigned)info.last_raw_ch1,
-    //         (unsigned)info.last_raw_ch2);
-    //     Debug_Printf("ESC DBG2 half3=%lu half4=%lu terr=%lu recover=%lu\r\n",
-    //         (unsigned long)info.pulse_half_ch3_count,
-    //         (unsigned long)info.pulse_half_ch4_count,
-    //         (unsigned long)info.tim_error_count,
-    //         (unsigned long)info.stuck_recover_count);
-    //     Debug_Printf("ESC power(uart)=%u elapsed=%lu ms\r\n",
-    //         (unsigned)s_power_from_uart,
-    //         (unsigned long)(HAL_GetTick() - s_esc_arm_start_ms));
-    // }
-
     Debug_UART_Process();
     RC_Process();
+    System_Manager_Tick1ms();
     Debug_Process();
 }
