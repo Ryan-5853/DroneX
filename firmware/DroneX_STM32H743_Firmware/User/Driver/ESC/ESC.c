@@ -24,9 +24,14 @@
  * 双通道独立启动：
  *   此版本 HAL 使用 per-channel ChannelState[6]，CH3 与 CH4 状态相互独立，
  *   可连续调用两次 HAL_TIM_PWM_Start_DMA 而不会产生 HAL_BUSY 冲突。
+ *
+ * 双向 DShot 时序/引脚参考 Betaflight：
+ *   platform/STM32/pwm_output_dshot_hal.c（pwmDshotSetDirectionInput、GPIO 上拉、ICFilter）
+ *   platform/common/stm32/pwm_output_dshot_shared.c（pwmTelemetryDecode）
  */
 
 #include "Driver/ESC/ESC.h"
+#include "Driver/Timing/Timing.h"
 #include "stm32h7xx_hal.h"
 #include <string.h>
 
@@ -42,7 +47,8 @@
 #define TIM2_RX_PSC       23U        /* 240MHz / (23+1) = 10MHz -> 0.1us/tick */
 #define TIM2_RX_ARR       0xFFFFFFFFU
 #define ESC_RX_MAX_EDGES  48U
-#define ESC_RX_TIMEOUT_MS 2U
+/* 无有效边沿时用 DWT 微秒超时结束 RX；勿用 HAL_GetTick(ms) 否则回传失败会卡满 ~1ms，4kHz 下大量丢帧电调无法解锁 */
+#define ESC_RX_TIMEOUT_US  300U
 
 /* DMA 缓冲字节数，向上取整到 32 字节（D-Cache 行大小）*/
 #define DSHOT_BUF_BYTES  (((DSHOT_FRAME_LEN * sizeof(uint32_t)) + 31U) & ~31U)
@@ -87,6 +93,7 @@ typedef struct {
     uint8_t active;
     uint8_t has_first_capture;
     uint32_t last_capture;
+    uint32_t start_cycles; /* DWT，用于 RX 微秒超时 */
     uint32_t start_ms;
 } ESC_RxState_t;
 
@@ -95,6 +102,9 @@ static ESC_Telemetry_t s_telem[ESC_CH_COUNT];
 static uint8_t s_rx_start_pending;
 static ESC_Command_t s_service_cmd[ESC_CH_COUNT];
 static ESC_ServiceState_t s_service_state[ESC_CH_COUNT];
+#if ESC_BIDIR_DSHOT
+static uint32_t s_bidir_tel_frame;
+#endif
 
 /* ─────────────────── 空闲态强制拉低（非反转 DShot） ───────────────────
  * 说明：
@@ -125,21 +135,64 @@ static inline void ESC_PinToGpioLow_PA3(void)
     GPIOA->MODER   = (GPIOA->MODER   & ~(3U << (3U * 2U))) | (1U << (3U * 2U));
 }
 
-static inline void ESC_PinsToAF_TIM2_CH3_CH4(void)
+/* 双路同时发 DShot：两路均 AF1。上拉仅用于双向（开漏回传）；纯发码时勿开上拉以免边沿变差、电调不识别 */
+static inline void ESC_PinsToAF_TxBoth(void)
 {
     /* AFRL: PA2/PA3 -> AF1 (TIM2) */
     GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << (2U * 4U))) | (0x1U << (2U * 4U));
     GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << (3U * 4U))) | (0x1U << (3U * 4U));
 
-    /* 推挽 + 无上下拉 + 高速 */
     GPIOA->OTYPER &= ~((1U << 2U) | (1U << 3U));
-    GPIOA->PUPDR  &= ~((3U << (2U * 2U)) | (3U << (3U * 2U)));
+#if ESC_BIDIR_DSHOT
+    GPIOA->PUPDR  = (GPIOA->PUPDR & ~((3U << (2U * 2U)) | (3U << (3U * 2U))))
+                  | ((1U << (2U * 2U)) | (1U << (3U * 2U))); /* PUPDR=01 上拉 */
+#else
+    GPIOA->PUPDR &= ~((3U << (2U * 2U)) | (3U << (3U * 2U)));
+#endif
     GPIOA->OSPEEDR = (GPIOA->OSPEEDR & ~((3U << (2U * 2U)) | (3U << (3U * 2U))))
                    |  ((3U << (2U * 2U)) | (3U << (3U * 2U)));
 
     /* 复用模式 MODER=10 */
     GPIOA->MODER = (GPIOA->MODER & ~((3U << (2U * 2U)) | (3U << (3U * 2U))))
                  |  ((2U << (2U * 2U)) | (2U << (3U * 2U)));
+}
+
+/*
+ * 仅一路做 GCR 回传时：接收脚 AF+上拉；另一路保持 GPIO 推挽强低。
+ * 若两路均 AF 而仅一路开 IC，未参与通道易呈高阻，与相邻线串扰会被另一路 ESC 当成油门（零油门误转）。
+ */
+static inline void ESC_PinsToAF_RxCh1_TxHoldCh2Low(void)
+{
+    /* PA2: TIM2_CH3 输入捕获 */
+    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << (2U * 4U))) | (0x1U << (2U * 4U));
+    GPIOA->MODER   = (GPIOA->MODER & ~(3U << (2U * 2U))) | (2U << (2U * 2U));
+    GPIOA->OTYPER &= ~(1U << 2U);
+    GPIOA->PUPDR   = (GPIOA->PUPDR & ~(3U << (2U * 2U))) | (1U << (2U * 2U));
+    GPIOA->OSPEEDR = (GPIOA->OSPEEDR & ~(3U << (2U * 2U))) | (3U << (2U * 2U));
+
+    /* PA3: 强低，不参与本帧遥测 */
+    GPIOA->BSRR    = (1U << (3U + 16U));
+    GPIOA->OTYPER &= ~(1U << 3U);
+    GPIOA->PUPDR &= ~(3U << (3U * 2U));
+    GPIOA->OSPEEDR = (GPIOA->OSPEEDR & ~(3U << (3U * 2U))) | (3U << (3U * 2U));
+    GPIOA->MODER   = (GPIOA->MODER & ~(3U << (3U * 2U))) | (1U << (3U * 2U));
+}
+
+static inline void ESC_PinsToAF_RxCh2_TxHoldCh1Low(void)
+{
+    /* PA2: 强低 */
+    GPIOA->BSRR    = (1U << (2U + 16U));
+    GPIOA->OTYPER &= ~(1U << 2U);
+    GPIOA->PUPDR &= ~(3U << (2U * 2U));
+    GPIOA->OSPEEDR = (GPIOA->OSPEEDR & ~(3U << (2U * 2U))) | (3U << (2U * 2U));
+    GPIOA->MODER   = (GPIOA->MODER & ~(3U << (2U * 2U))) | (1U << (2U * 2U));
+
+    /* PA3: TIM2_CH4 输入捕获 */
+    GPIOA->AFR[0] = (GPIOA->AFR[0] & ~(0xFU << (3U * 4U))) | (0x1U << (3U * 4U));
+    GPIOA->MODER   = (GPIOA->MODER & ~(3U << (3U * 2U))) | (2U << (3U * 2U));
+    GPIOA->OTYPER &= ~(1U << 3U);
+    GPIOA->PUPDR   = (GPIOA->PUPDR & ~(3U << (3U * 2U))) | (1U << (3U * 2U));
+    GPIOA->OSPEEDR = (GPIOA->OSPEEDR & ~(3U << (3U * 2U))) | (3U << (3U * 2U));
 }
 
 static void ESC_Tim2ConfigTx(void)
@@ -197,7 +250,8 @@ static bool ESC_DecodeTelemetryFromEdges(const ESC_RxState_t *rx, ESC_Telemetry_
     uint8_t level = 1U;
     uint32_t min_dt = 0xFFFFFFFFU;
 
-    if (rx->edge_count < 6U) {
+    /* Betaflight MIN_GCR_EDGES = 7 */
+    if (rx->edge_count < 7U) {
         return false;
     }
 
@@ -285,13 +339,33 @@ static void ESC_StartRxChannel(ESC_Channel_t ch)
 
     memset(&s_rx[ch], 0, sizeof(s_rx[ch]));
     s_rx[ch].active = 1U;
+    s_rx[ch].start_cycles = Timing_GetCycles();
     s_rx[ch].start_ms = HAL_GetTick();
+
+#if defined(STM32H743xx)
+    /* Betaflight pwm_output_dshot_hal.c pwmDshotSetDirectionInput：H7 先 GPIO 推挽低速输出再配 IC，避免毛刺 */
+    {
+        GPIO_InitTypeDef gpio = {0};
+        gpio.Pin   = (ch == ESC_CH1) ? GPIO_PIN_2 : GPIO_PIN_3;
+        gpio.Mode  = GPIO_MODE_OUTPUT_PP;
+        gpio.Pull  = GPIO_NOPULL;
+        gpio.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(GPIOA, &gpio);
+        HAL_GPIO_WritePin(GPIOA, gpio.Pin, GPIO_PIN_RESET);
+    }
+#endif
 
     ic.ICPolarity  = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;
     ic.ICSelection = TIM_ICSELECTION_DIRECTTI;
     ic.ICPrescaler = TIM_ICPSC_DIV1;
-    ic.ICFilter    = 0U;
+    ic.ICFilter    = 2U; /* 与 BF LL_TIM_IC_StructInit + ICFilter=2 一致 */
     (void)HAL_TIM_IC_ConfigChannel(&s_htim2, &ic, tim_ch);
+    /* 仅接收路 AF+上拉；另一路 GPIO 强低，减轻两线并行时的串扰 */
+    if (ch == ESC_CH1) {
+        ESC_PinsToAF_RxCh1_TxHoldCh2Low();
+    } else {
+        ESC_PinsToAF_RxCh2_TxHoldCh1Low();
+    }
     (void)HAL_TIM_IC_Start_IT(&s_htim2, tim_ch);
 
     if (ch == ESC_CH1) {
@@ -312,7 +386,7 @@ static void ESC_StartPendingRxIfReady(void)
     }
 
     ESC_Tim2ConfigRx();
-    ESC_PinsToAF_TIM2_CH3_CH4();
+    /* RX 引脚在 ESC_StartRxChannel 内配置：仅一路 AF+IC，另一路 GPIO 强低（减两线串扰） */
 
     if (s_rx_start_pending & DMA_BUSY_CH3_RX) {
         ESC_StartRxChannel(ESC_CH1);
@@ -395,7 +469,13 @@ void HAL_TIM_PWM_MspInit(TIM_HandleTypeDef *htim)
     GPIO_InitTypeDef gpio = {0};
     gpio.Pin       = GPIO_PIN_2 | GPIO_PIN_3;
     gpio.Mode      = GPIO_MODE_AF_PP;
-    gpio.Pull      = GPIO_PULLDOWN;
+#if ESC_BIDIR_DSHOT
+    /* 双向：与 BF 一致上拉，便于电调开漏回传 */
+    gpio.Pull      = GPIO_PULLUP;
+#else
+    /* 纯 DShot 发码：勿内部上拉，避免与推挽边沿叠加导致电调不识别 */
+    gpio.Pull      = GPIO_NOPULL;
+#endif
     gpio.Speed     = GPIO_SPEED_FREQ_VERY_HIGH;
     gpio.Alternate = GPIO_AF1_TIM2;
     HAL_GPIO_Init(GPIOA, &gpio);
@@ -730,7 +810,7 @@ ESC_Status_t ESC_Update(void)
     }
 
     /* 每次发送前恢复为 TIM2 复用输出（上一次发送完成后会被切回 GPIO 低电平） */
-    ESC_PinsToAF_TIM2_CH3_CH4();
+    ESC_PinsToAF_TxBoth();
 
     /* 切到 AF 后通道尚未使能，引脚会浮空导致信号线电压线性上升；立即用 TIM 驱动为低（CCR=0 并开启输出），再启动 DMA */
     s_htim2.Instance->CCR3 = 0U;
@@ -822,12 +902,32 @@ ESC_Status_t ESC_Service_WriteCommand(ESC_Channel_t ch, int16_t throttle, bool r
 void ESC_Service_Tick(void)
 {
     ESC_Status_t st = ESC_OK;
+#if ESC_BIDIR_DSHOT
+    s_bidir_tel_frame++;
+#endif
 
     for (uint8_t ch = 0U; ch < ESC_CH_COUNT; ch++) {
         s_service_state[ch].tick_count++;
+        bool req_tel = (s_service_cmd[ch].request_telemetry != 0U);
+#if ESC_BIDIR_DSHOT
+        if (req_tel) {
+#if ESC_BIDIR_TELEM_EVERY_N > 1U
+            if ((s_bidir_tel_frame % ESC_BIDIR_TELEM_EVERY_N) != 0U) {
+                req_tel = false;
+            }
+#endif
+#if ESC_BIDIR_TELEM_ALTERNATE
+            if (req_tel) {
+                uint32_t n_div = (ESC_BIDIR_TELEM_EVERY_N > 1U) ? ESC_BIDIR_TELEM_EVERY_N : 1U;
+                uint32_t blk = s_bidir_tel_frame / n_div;
+                req_tel = (((uint32_t)ch ^ blk) & 1U) == 0U;
+            }
+#endif
+        }
+#endif
         st = ESC_SetThrottleBidirectionalEx((ESC_Channel_t)ch,
                                             s_service_cmd[ch].throttle,
-                                            (s_service_cmd[ch].request_telemetry != 0U));
+                                            req_tel);
         if (st != ESC_OK) {
             s_service_state[ch].last_update_ok = 0U;
             s_service_state[ch].update_err_count++;
@@ -872,13 +972,24 @@ bool ESC_Service_ReadState(ESC_Channel_t ch, ESC_ServiceState_t *out)
 void ESC_RecoverIfStuck(uint32_t timeout_ms)
 {
     static uint32_t s_stuck_since_ms = 0U;
+    uint32_t now = HAL_GetTick();
+
+    /* 须先于 stuck 判定执行：微秒级结束无回传的 RX，尽快释放 BUSY */
+    for (uint8_t ch = 0U; ch < ESC_CH_COUNT; ch++) {
+        if (!s_rx[ch].active) {
+            continue;
+        }
+        uint32_t dt_cyc = Timing_GetCycles() - s_rx[ch].start_cycles;
+        if (Timing_CyclesToUs(dt_cyc) >= ESC_RX_TIMEOUT_US) {
+            ESC_FinishRxChannel((ESC_Channel_t)ch);
+        }
+    }
 
     if (!s_dma_busy) {
         s_stuck_since_ms = 0U;
         return;
     }
 
-    uint32_t now = HAL_GetTick();
     if (s_stuck_since_ms == 0U) {
         s_stuck_since_ms = now;
         return;
@@ -897,11 +1008,5 @@ void ESC_RecoverIfStuck(uint32_t timeout_ms)
         s_dbg.dma_busy           = 0U;
         s_dbg.stuck_recover_count++;
         s_stuck_since_ms         = 0U;
-    }
-
-    for (uint8_t ch = 0U; ch < ESC_CH_COUNT; ch++) {
-        if (s_rx[ch].active && (now - s_rx[ch].start_ms) >= ESC_RX_TIMEOUT_MS) {
-            ESC_FinishRxChannel((ESC_Channel_t)ch);
-        }
     }
 }

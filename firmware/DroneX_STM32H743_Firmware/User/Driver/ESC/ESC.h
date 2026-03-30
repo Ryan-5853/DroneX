@@ -2,11 +2,36 @@
 #define __ESC_H__
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* 1=主循环周期性打印 DShot 发送统计（约 100ms 一条，勿在中断内打开大量日志） */
 #ifndef ESC_LOG_DSHOT
 #define ESC_LOG_DSHOT  1
+#endif
+
+/* 1=帧内请求 DShot 遥测位，接收 eRPM 等（双向 DShot） */
+#ifndef ESC_BIDIR_DSHOT
+#define ESC_BIDIR_DSHOT  0
+#endif
+
+/*
+ * 双向 DShot 时建议 1：每帧只让一路电机请求遥测并进入 RX。
+ * 两路同时 RX + 高节拍易导致 TIM2 长时间 BUSY、stuck 增加、电机无响应。
+ * 设为 0 则两路同时请求（仅建议调试用）。
+ */
+#ifndef ESC_BIDIR_TELEM_ALTERNATE
+#define ESC_BIDIR_TELEM_ALTERNATE  1
+#endif
+
+/* 每 N 帧才允许发一次遥测请求（参考 BF 降低 RX 占用）；1=每帧可请求（易堵死） */
+#ifndef ESC_BIDIR_TELEM_EVERY_N
+#define ESC_BIDIR_TELEM_EVERY_N  8U
+#endif
+
+/* 机械转速换算：与 Betaflight 等一致 rpm ≈ eRPM_raw * 200 / 电机磁极数（整圈磁极数，如 14） */
+#ifndef ESC_MOTOR_POLE_COUNT
+#define ESC_MOTOR_POLE_COUNT  14U
 #endif
 
 #ifdef __cplusplus
@@ -58,6 +83,19 @@ typedef struct {
     uint8_t  edge_count;        /* 本帧捕获到的边沿数量 */
     uint32_t timestamp_ms;      /* HAL_GetTick 时间戳 */
 } ESC_Telemetry_t;
+
+/* 由遥测 12 位 eRPM 粗算机械转速 (RPM)；无效或非 eRPM 类型时返回 0 */
+static inline uint32_t ESC_Telemetry_ErpmToMechanicalRpm(const ESC_Telemetry_t *t)
+{
+    if (t == NULL || !t->valid) {
+        return 0U;
+    }
+    uint32_t poles = (uint32_t)ESC_MOTOR_POLE_COUNT;
+    if (poles == 0U) {
+        poles = 14U;
+    }
+    return (uint32_t)t->data_12bit * 200U / poles;
+}
 
 typedef struct {
     int16_t throttle;           /* 期望油门，建议范围 0..1000 */

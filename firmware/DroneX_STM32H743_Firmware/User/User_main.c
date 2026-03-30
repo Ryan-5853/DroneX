@@ -36,16 +36,20 @@ static uint32_t s_esc_print_ms = 0;
 static uint32_t s_dshot_log_last_ok;
 static uint32_t s_dshot_log_last_rej;
 static uint8_t  s_dshot_log_inited;
+#if ESC_BIDIR_DSHOT
+static uint32_t s_bidir_last_rx_ok[ESC_CH_COUNT];
+static uint32_t s_bidir_last_rx_err[ESC_CH_COUNT];
+#endif
 #endif
 
 /* RC 通道归一化值 -1000..1000 映射到 ESC 油门 0..300（30%） */
 static int16_t MapRcToEsc30Percent(int16_t rc_norm)
 {
-    int32_t t = ((int32_t)rc_norm ) * 900 / 1000;
+    int32_t t = ((int32_t)rc_norm ) * 200 / 1000;
     if (t < 0) {
         t = 0;
-    } else if (t > 900) {
-        t = 900;
+    } else if (t > 200) {
+        t = 200;
     }
     return (int16_t)t;
 }
@@ -55,8 +59,13 @@ static void ESC_DShot_Task(void)
 {
     const RC_Signal_t *rc = RC_GetSignal();
     s_esc_coax_throttle = MapRcToEsc30Percent(rc->ch[2]);
-    (void)ESC_Service_WriteCommand(ESC_CH1, s_esc_coax_throttle, false);
-    (void)ESC_Service_WriteCommand(ESC_CH2, s_esc_coax_throttle, false);
+#if ESC_BIDIR_DSHOT
+    const bool esc_req_telemetry = true;
+#else
+    const bool esc_req_telemetry = false;
+#endif
+    (void)ESC_Service_WriteCommand(ESC_CH1, s_esc_coax_throttle, esc_req_telemetry);
+    (void)ESC_Service_WriteCommand(ESC_CH2, s_esc_coax_throttle, esc_req_telemetry);
     ESC_Service_Tick();
 }
 
@@ -194,6 +203,15 @@ void User_Main_Loop(void)
                 s_dshot_log_inited   = 1U;
                 s_dshot_log_last_ok  = di.update_ok_count;
                 s_dshot_log_last_rej = di.update_busy_reject_count;
+#if ESC_BIDIR_DSHOT
+                for (uint8_t chi = 0U; chi < ESC_CH_COUNT; chi++) {
+                    ESC_ServiceState_t sst;
+                    if (ESC_Service_ReadState((ESC_Channel_t)chi, &sst)) {
+                        s_bidir_last_rx_ok[chi]  = sst.rx_ok_count;
+                        s_bidir_last_rx_err[chi] = sst.rx_err_count;
+                    }
+                }
+#endif
             } else {
                 uint32_t d_ok  = di.update_ok_count - s_dshot_log_last_ok;
                 uint32_t d_rej = di.update_busy_reject_count - s_dshot_log_last_rej;
@@ -209,6 +227,37 @@ void User_Main_Loop(void)
                     (unsigned)di.last_raw_ch1,
                     (unsigned)di.last_raw_ch2,
                     (unsigned)di.dma_busy);
+#if ESC_BIDIR_DSHOT
+                {
+                    ESC_ServiceState_t st1, st2;
+                    (void)ESC_Service_ReadState(ESC_CH1, &st1);
+                    (void)ESC_Service_ReadState(ESC_CH2, &st2);
+                    uint32_t d_rx_ok1  = st1.rx_ok_count - s_bidir_last_rx_ok[0];
+                    uint32_t d_rx_ok2  = st2.rx_ok_count - s_bidir_last_rx_ok[1];
+                    uint32_t d_rx_er1  = st1.rx_err_count - s_bidir_last_rx_err[0];
+                    uint32_t d_rx_er2  = st2.rx_err_count - s_bidir_last_rx_err[1];
+                    s_bidir_last_rx_ok[0]  = st1.rx_ok_count;
+                    s_bidir_last_rx_ok[1]  = st2.rx_ok_count;
+                    s_bidir_last_rx_err[0] = st1.rx_err_count;
+                    s_bidir_last_rx_err[1] = st2.rx_err_count;
+                    uint32_t rpm1 = ESC_Telemetry_ErpmToMechanicalRpm(&st1.last_telemetry);
+                    uint32_t rpm2 = ESC_Telemetry_ErpmToMechanicalRpm(&st2.last_telemetry);
+                    Debug_Printf(
+                        "DSHOT bidir: rpm=%lu/%lu erpm12=%u/%u | +100ms rx_ok=%lu/%lu rx_fail=%lu/%lu | cum ok=%lu/%lu fail=%lu/%lu\r\n",
+                        (unsigned long)rpm1,
+                        (unsigned long)rpm2,
+                        (unsigned)st1.last_telemetry.data_12bit,
+                        (unsigned)st2.last_telemetry.data_12bit,
+                        (unsigned long)d_rx_ok1,
+                        (unsigned long)d_rx_ok2,
+                        (unsigned long)d_rx_er1,
+                        (unsigned long)d_rx_er2,
+                        (unsigned long)st1.rx_ok_count,
+                        (unsigned long)st2.rx_ok_count,
+                        (unsigned long)st1.rx_err_count,
+                        (unsigned long)st2.rx_err_count);
+                }
+#endif
             }
         }
 #endif
