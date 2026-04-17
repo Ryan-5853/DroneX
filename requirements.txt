@@ -1,0 +1,3 @@
+# DroneX Python dependencies
+# Current sim_py modules only use Python standard library.
+# So no third-party packages are required at this stage.

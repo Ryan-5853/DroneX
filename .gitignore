@@ -111,3 +111,33 @@ $RECYCLE.BIN/
 .env
 .env.local
 .env.*.local
+
+# -----------------------------------------------------------------------------
+# Python（sim_py）
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.py,cover
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.ipynb_checkpoints/
+
+# Python 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# Python 打包产物
+dist/
+site/
+*.egg-info/
+pip-wheel-metadata/
