@@ -56,20 +56,36 @@ static float s_att_ctrl_out_y = 0.0f;
 #define USER_ATT_CTRL_MAX_PITCH_RAD  (20.0f*PI/180.0f) /* 20 deg */
 
 static const Att_Ctrl_PID_Config_t s_att_ctrl_cfg = {
-    .gains_roll = { 1.0f, 0.0f, 10.0f },
-    .gains_pitch = { 1.0f, 0.0f, 10.0f },
+    .gains_roll_angle = { 8.0f, 0.0f, 0.0f },
+    .gains_pitch_angle = { 8.0f, 0.0f, 0.0f },
+    .gains_roll_rate = { 0.12f, 0.0f, 0.002f },
+    .gains_pitch_rate = { 0.12f, 0.0f, 0.002f },
 
-    .roll_out_min = -1.0f,
-    .roll_out_max = 1.0f,
-    .pitch_out_min = -1.0f,
-    .pitch_out_max = 1.0f,
+    .roll_angle_out_min = -4.0f,
+    .roll_angle_out_max = 4.0f,
+    .pitch_angle_out_min = -4.0f,
+    .pitch_angle_out_max = 4.0f,
 
-    .enable_roll_i_limit = 0U,
-    .roll_i_min = 0.0f,
-    .roll_i_max = 0.0f,
-    .enable_pitch_i_limit = 0U,
-    .pitch_i_min = 0.0f,
-    .pitch_i_max = 0.0f,
+    .enable_roll_angle_i_limit = 0U,
+    .roll_angle_i_min = 0.0f,
+    .roll_angle_i_max = 0.0f,
+    .enable_pitch_angle_i_limit = 0U,
+    .pitch_angle_i_min = 0.0f,
+    .pitch_angle_i_max = 0.0f,
+
+    .roll_rate_out_min = -1.0f,
+    .roll_rate_out_max = 1.0f,
+    .pitch_rate_out_min = -1.0f,
+    .pitch_rate_out_max = 1.0f,
+
+    .enable_roll_rate_i_limit = 0U,
+    .roll_rate_i_min = 0.0f,
+    .roll_rate_i_max = 0.0f,
+    .enable_pitch_rate_i_limit = 0U,
+    .pitch_rate_i_min = 0.0f,
+    .pitch_rate_i_max = 0.0f,
+
+    .gyro_lpf_tau_s = 0.02f,
 
     .servo_min_norm = -1.0f,
     .servo_max_norm = 1.0f,
@@ -132,6 +148,7 @@ static void Vector_Gimbal_AutoTask(const RC_Signal_t *rc)
 {
     float roll;
     float pitch;
+    float omega[3];
     float out_x;
     float out_y;
     Att_Ctrl_PID_In_t in;
@@ -147,10 +164,14 @@ static void Vector_Gimbal_AutoTask(const RC_Signal_t *rc)
     }
 
     Attitude_Est_GetEuler(&roll, &pitch, NULL);
+    Attitude_Est_GetAngularRate(omega);
 
     memset(&in, 0, sizeof(in));
     in.roll_rad = roll;
     in.pitch_rad = pitch;
+    /* Attitude_Est defines roll about body Y, pitch about body X. */
+    in.roll_rate_fb_rad_s = omega[1];
+    in.pitch_rate_fb_rad_s = omega[0];
     in.roll_sp_rad = Rc_ToNorm(rc->ch[0]) * USER_ATT_CTRL_MAX_ROLL_RAD;
     in.pitch_sp_rad = -Rc_ToNorm(rc->ch[1]) * USER_ATT_CTRL_MAX_PITCH_RAD;
     in.time_us = User_GetMonotonicUs();

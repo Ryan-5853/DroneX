@@ -626,6 +626,16 @@
           </Files>
         </Group>
         <Group>
+          <GroupName>User/Algorithm/Common/Filter</GroupName>
+          <Files>
+            <File>
+              <FileName>Filter.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>../User/Algorithm/Common/Filter/Filter.c</FilePath>
+            </File>
+          </Files>
+        </Group>
+        <Group>
           <GroupName>User/Algorithm/Att_Ctrl_PID</GroupName>
           <Files>
             <File>

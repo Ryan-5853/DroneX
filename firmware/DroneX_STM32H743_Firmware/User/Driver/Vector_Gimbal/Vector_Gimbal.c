@@ -1,4 +1,5 @@
 #include "Driver/Vector_Gimbal/Vector_Gimbal.h"
+#include "Algorithm/Common/Filter/Filter.h"
 #include "stm32h7xx_hal.h"
 
 #define GIMBAL_FREQ_HZ          333U
@@ -22,9 +23,8 @@ typedef struct {
 } VectorGimbal_AxisConfig_t;
 
 typedef struct {
-    float filtered_pulse_us;
+    Filter_t output_filter;
     uint32_t last_update_ms;
-    uint8_t initialized;
 } VectorGimbal_AxisState_t;
 
 /*
@@ -70,26 +70,20 @@ static uint16_t filter_output_pulse_us(VectorGimbal_Axis_t axis, uint16_t target
     uint32_t now_ms = HAL_GetTick();
     uint32_t dt_ms;
     float filtered;
-    float alpha;
+    int rc;
 
     target_pulse = clamp_output_pulse_us(target_pulse);
 
-    if ((state->initialized == 0U) || (s_filter_time_ms == 0U)) {
-        state->filtered_pulse_us = (float)target_pulse;
-        state->last_update_ms = now_ms;
-        state->initialized = 1U;
+    dt_ms = now_ms - state->last_update_ms;
+    rc = Filter_SetIIR1TimeConstant(&state->output_filter, (float)s_filter_time_ms * 1.0e-3f);
+    if (rc != FILTER_OK) {
         return target_pulse;
     }
-
-    dt_ms = now_ms - state->last_update_ms;
-    if (dt_ms == 0U) {
-        return clamp_output_pulse_us((uint16_t)(state->filtered_pulse_us + 0.5f));
-    }
-
-    alpha = (float)dt_ms / ((float)s_filter_time_ms + (float)dt_ms);
-    filtered = state->filtered_pulse_us + alpha * ((float)target_pulse - state->filtered_pulse_us);
-    state->filtered_pulse_us = filtered;
+    rc = Filter_Process(&state->output_filter, (float)target_pulse, (float)dt_ms * 1.0e-3f, &filtered);
     state->last_update_ms = now_ms;
+    if (rc != FILTER_OK) {
+        return target_pulse;
+    }
 
     return clamp_output_pulse_us((uint16_t)(filtered + 0.5f));
 }
@@ -151,6 +145,7 @@ void Vector_Gimbal_Init(void)
     TIM_OC_InitTypeDef oc = {0};
     uint32_t period_ticks = (GIMBAL_TIMER_TICK_HZ / GIMBAL_FREQ_HZ);
     uint32_t i;
+    float filtered;
 
     __HAL_RCC_GPIOD_CLK_ENABLE();
     __HAL_RCC_TIM4_CLK_ENABLE();
@@ -182,9 +177,10 @@ void Vector_Gimbal_Init(void)
 
     for (i = 0U; i < (uint32_t)VECTOR_GIMBAL_AXIS_COUNT; i++) {
         oc.Pulse = clamp_output_pulse_us(s_axis_cfg[i].pulse_mid_us);
-        s_axis_state[i].filtered_pulse_us = (float)oc.Pulse;
+        (void)Filter_InitIIR1(&s_axis_state[i].output_filter, FILTER_SHAPE_LOW_PASS,
+            (float)s_filter_time_ms * 1.0e-3f);
+        (void)Filter_Process(&s_axis_state[i].output_filter, (float)oc.Pulse, 0.0f, &filtered);
         s_axis_state[i].last_update_ms = HAL_GetTick();
-        s_axis_state[i].initialized = 1U;
         if (HAL_TIM_PWM_ConfigChannel(&s_htim4, &oc, s_axis_cfg[i].channel) != HAL_OK) {
             return;
         }

@@ -29,20 +29,36 @@ extern "C" {
  * - 机构/舵机安装方向差异放在驱动或最终输出层处理，不通过 PID 参数隐式修正。
  */
 typedef struct {
-    PID_Gains_t gains_roll;
-    PID_Gains_t gains_pitch;
+    PID_Gains_t gains_roll_angle;
+    PID_Gains_t gains_pitch_angle;
+    PID_Gains_t gains_roll_rate;
+    PID_Gains_t gains_pitch_rate;
 
-    float roll_out_min;
-    float roll_out_max;
-    float pitch_out_min;
-    float pitch_out_max;
+    float roll_angle_out_min;
+    float roll_angle_out_max;
+    float pitch_angle_out_min;
+    float pitch_angle_out_max;
 
-    uint8_t enable_roll_i_limit;
-    float roll_i_min;
-    float roll_i_max;
-    uint8_t enable_pitch_i_limit;
-    float pitch_i_min;
-    float pitch_i_max;
+    uint8_t enable_roll_angle_i_limit;
+    float roll_angle_i_min;
+    float roll_angle_i_max;
+    uint8_t enable_pitch_angle_i_limit;
+    float pitch_angle_i_min;
+    float pitch_angle_i_max;
+
+    float roll_rate_out_min;
+    float roll_rate_out_max;
+    float pitch_rate_out_min;
+    float pitch_rate_out_max;
+
+    uint8_t enable_roll_rate_i_limit;
+    float roll_rate_i_min;
+    float roll_rate_i_max;
+    uint8_t enable_pitch_rate_i_limit;
+    float pitch_rate_i_min;
+    float pitch_rate_i_max;
+
+    float gyro_lpf_tau_s;
 
     float servo_min_norm;
     float servo_max_norm;
@@ -56,6 +72,8 @@ typedef struct {
 typedef struct {
     float roll_rad;
     float pitch_rad;
+    float roll_rate_fb_rad_s;
+    float pitch_rate_fb_rad_s;
     float roll_sp_rad;
     float pitch_sp_rad;
     uint32_t time_us;

@@ -4,6 +4,7 @@
  */
 
 #include "Algorithm/Att_Ctrl_PID/Att_Ctrl_PID.h"
+#include "Algorithm/Common/Filter/Filter.h"
 #include <math.h>
 #include <string.h>
 
@@ -14,8 +15,11 @@
 typedef struct {
     uint8_t valid;
     Att_Ctrl_PID_Config_t cfg;
-    PID_t pid_roll;
-    PID_t pid_pitch;
+    PID_t pid_roll_angle;
+    PID_t pid_pitch_angle;
+    PID_t pid_roll_rate;
+    PID_t pid_pitch_rate;
+    Filter_t gyro_lpf[2];
 } Att_Ctrl_PID_State_t;
 
 static Att_Ctrl_PID_State_t s_ac;
@@ -66,14 +70,24 @@ static int pid_apply_limits(PID_t *pid, float out_min, float out_max,
 
 static int validate_cfg(const Att_Ctrl_PID_Config_t *c)
 {
-    if (c->roll_out_min > c->roll_out_max || c->pitch_out_min > c->pitch_out_max
+    if (c->roll_angle_out_min > c->roll_angle_out_max || c->pitch_angle_out_min > c->pitch_angle_out_max
+        || c->roll_rate_out_min > c->roll_rate_out_max || c->pitch_rate_out_min > c->pitch_rate_out_max
         || c->servo_min_norm > c->servo_max_norm) {
         return ATT_CTRL_PID_ERR_LIMIT;
     }
-    if (c->enable_roll_i_limit && c->roll_i_min > c->roll_i_max) {
+    if (c->enable_roll_angle_i_limit && c->roll_angle_i_min > c->roll_angle_i_max) {
         return ATT_CTRL_PID_ERR_LIMIT;
     }
-    if (c->enable_pitch_i_limit && c->pitch_i_min > c->pitch_i_max) {
+    if (c->enable_pitch_angle_i_limit && c->pitch_angle_i_min > c->pitch_angle_i_max) {
+        return ATT_CTRL_PID_ERR_LIMIT;
+    }
+    if (c->enable_roll_rate_i_limit && c->roll_rate_i_min > c->roll_rate_i_max) {
+        return ATT_CTRL_PID_ERR_LIMIT;
+    }
+    if (c->enable_pitch_rate_i_limit && c->pitch_rate_i_min > c->pitch_rate_i_max) {
+        return ATT_CTRL_PID_ERR_LIMIT;
+    }
+    if (c->gyro_lpf_tau_s < 0.0f) {
         return ATT_CTRL_PID_ERR_LIMIT;
     }
     return ATT_CTRL_PID_OK;
@@ -94,23 +108,49 @@ int Att_Ctrl_PID_Init(const Att_Ctrl_PID_Config_t *cfg)
     memset(&s_ac, 0, sizeof(s_ac));
     memcpy(&s_ac.cfg, cfg, sizeof(*cfg));
 
-    rc = PID_Init(&s_ac.pid_roll, &cfg->gains_roll);
+    rc = PID_Init(&s_ac.pid_roll_angle, &cfg->gains_roll_angle);
     if (rc != PID_OK) {
         return ATT_CTRL_PID_ERR_NULL;
     }
-    rc = PID_Init(&s_ac.pid_pitch, &cfg->gains_pitch);
+    rc = PID_Init(&s_ac.pid_pitch_angle, &cfg->gains_pitch_angle);
     if (rc != PID_OK) {
         return ATT_CTRL_PID_ERR_NULL;
     }
-    rc = pid_apply_limits(&s_ac.pid_roll, cfg->roll_out_min, cfg->roll_out_max,
-        cfg->enable_roll_i_limit, cfg->roll_i_min, cfg->roll_i_max);
+    rc = PID_Init(&s_ac.pid_roll_rate, &cfg->gains_roll_rate);
+    if (rc != PID_OK) {
+        return ATT_CTRL_PID_ERR_NULL;
+    }
+    rc = PID_Init(&s_ac.pid_pitch_rate, &cfg->gains_pitch_rate);
+    if (rc != PID_OK) {
+        return ATT_CTRL_PID_ERR_NULL;
+    }
+    rc = pid_apply_limits(&s_ac.pid_roll_angle, cfg->roll_angle_out_min, cfg->roll_angle_out_max,
+        cfg->enable_roll_angle_i_limit, cfg->roll_angle_i_min, cfg->roll_angle_i_max);
     if (rc != ATT_CTRL_PID_OK) {
         return rc;
     }
-    rc = pid_apply_limits(&s_ac.pid_pitch, cfg->pitch_out_min, cfg->pitch_out_max,
-        cfg->enable_pitch_i_limit, cfg->pitch_i_min, cfg->pitch_i_max);
+    rc = pid_apply_limits(&s_ac.pid_pitch_angle, cfg->pitch_angle_out_min, cfg->pitch_angle_out_max,
+        cfg->enable_pitch_angle_i_limit, cfg->pitch_angle_i_min, cfg->pitch_angle_i_max);
     if (rc != ATT_CTRL_PID_OK) {
         return rc;
+    }
+    rc = pid_apply_limits(&s_ac.pid_roll_rate, cfg->roll_rate_out_min, cfg->roll_rate_out_max,
+        cfg->enable_roll_rate_i_limit, cfg->roll_rate_i_min, cfg->roll_rate_i_max);
+    if (rc != ATT_CTRL_PID_OK) {
+        return rc;
+    }
+    rc = pid_apply_limits(&s_ac.pid_pitch_rate, cfg->pitch_rate_out_min, cfg->pitch_rate_out_max,
+        cfg->enable_pitch_rate_i_limit, cfg->pitch_rate_i_min, cfg->pitch_rate_i_max);
+    if (rc != ATT_CTRL_PID_OK) {
+        return rc;
+    }
+    rc = Filter_InitIIR1(&s_ac.gyro_lpf[0], FILTER_SHAPE_LOW_PASS, cfg->gyro_lpf_tau_s);
+    if (rc != FILTER_OK) {
+        return ATT_CTRL_PID_ERR_LIMIT;
+    }
+    rc = Filter_InitIIR1(&s_ac.gyro_lpf[1], FILTER_SHAPE_LOW_PASS, cfg->gyro_lpf_tau_s);
+    if (rc != FILTER_OK) {
+        return ATT_CTRL_PID_ERR_LIMIT;
     }
     s_ac.valid = 1u;
     return ATT_CTRL_PID_OK;
@@ -121,16 +161,27 @@ void Att_Ctrl_PID_Reset(void)
     if (!s_ac.valid) {
         return;
     }
-    PID_Reset(&s_ac.pid_roll);
-    PID_Reset(&s_ac.pid_pitch);
+    PID_Reset(&s_ac.pid_roll_angle);
+    PID_Reset(&s_ac.pid_pitch_angle);
+    PID_Reset(&s_ac.pid_roll_rate);
+    PID_Reset(&s_ac.pid_pitch_rate);
+    Filter_Reset(&s_ac.gyro_lpf[0]);
+    Filter_Reset(&s_ac.gyro_lpf[1]);
 }
 
 int Att_Ctrl_PID_Update(const Att_Ctrl_PID_In_t *in, Att_Ctrl_PID_Out_t *out)
 {
     float e_roll;
     float e_pitch;
-    float u_roll;
-    float u_pitch;
+    float roll_rate_sp;
+    float pitch_rate_sp;
+    float gyro_roll_filt;
+    float gyro_pitch_filt;
+    float e_roll_rate;
+    float e_pitch_rate;
+    float servo_roll_cmd;
+    float servo_pitch_cmd;
+    float dt_s;
     int rc;
 
     if (!s_ac.valid || in == NULL || out == NULL) {
@@ -140,21 +191,57 @@ int Att_Ctrl_PID_Update(const Att_Ctrl_PID_In_t *in, Att_Ctrl_PID_Out_t *out)
     e_roll = angle_err_rad(in->roll_sp_rad, in->roll_rad);
     e_pitch = angle_err_rad(in->pitch_sp_rad, in->pitch_rad);
 
-    rc = PID_Update(&s_ac.pid_roll, e_roll, in->time_us, &u_roll);
+    if ((s_ac.pid_roll_angle.has_time != 0U) && (in->time_us >= s_ac.pid_roll_angle.prev_time_us)) {
+        dt_s = (float)(in->time_us - s_ac.pid_roll_angle.prev_time_us) * (1.0f / 1000000.0f);
+    } else {
+        dt_s = 0.0f;
+    }
+
+    rc = PID_Update(&s_ac.pid_roll_angle, e_roll, in->time_us, &roll_rate_sp);
     if (rc != PID_OK) {
         return (rc == PID_ERR_TIME) ? ATT_CTRL_PID_ERR_TIME : ATT_CTRL_PID_ERR_NULL;
     }
-    rc = PID_Update(&s_ac.pid_pitch, e_pitch, in->time_us, &u_pitch);
+    rc = PID_Update(&s_ac.pid_pitch_angle, e_pitch, in->time_us, &pitch_rate_sp);
     if (rc != PID_OK) {
         return (rc == PID_ERR_TIME) ? ATT_CTRL_PID_ERR_TIME : ATT_CTRL_PID_ERR_NULL;
     }
+
+    rc = Filter_SetIIR1TimeConstant(&s_ac.gyro_lpf[0], s_ac.cfg.gyro_lpf_tau_s);
+    if (rc != FILTER_OK) {
+        return ATT_CTRL_PID_ERR_LIMIT;
+    }
+    rc = Filter_SetIIR1TimeConstant(&s_ac.gyro_lpf[1], s_ac.cfg.gyro_lpf_tau_s);
+    if (rc != FILTER_OK) {
+        return ATT_CTRL_PID_ERR_LIMIT;
+    }
+    rc = Filter_Process(&s_ac.gyro_lpf[0], in->roll_rate_fb_rad_s, dt_s, &gyro_roll_filt);
+    if (rc != FILTER_OK) {
+        return ATT_CTRL_PID_ERR_NULL;
+    }
+    rc = Filter_Process(&s_ac.gyro_lpf[1], in->pitch_rate_fb_rad_s, dt_s, &gyro_pitch_filt);
+    if (rc != FILTER_OK) {
+        return ATT_CTRL_PID_ERR_NULL;
+    }
+
+    e_roll_rate = roll_rate_sp - gyro_roll_filt;
+    e_pitch_rate = pitch_rate_sp - gyro_pitch_filt;
+
+    rc = PID_Update(&s_ac.pid_roll_rate, e_roll_rate, in->time_us, &servo_roll_cmd);
+    if (rc != PID_OK) {
+        return (rc == PID_ERR_TIME) ? ATT_CTRL_PID_ERR_TIME : ATT_CTRL_PID_ERR_NULL;
+    }
+    rc = PID_Update(&s_ac.pid_pitch_rate, e_pitch_rate, in->time_us, &servo_pitch_cmd);
+    if (rc != PID_OK) {
+        return (rc == PID_ERR_TIME) ? ATT_CTRL_PID_ERR_TIME : ATT_CTRL_PID_ERR_NULL;
+    }
+
     {
         const Att_Ctrl_PID_Config_t *c = &s_ac.cfg;
         float sx;
         float sy;
 
-        sx = c->servo_trim_norm[0] + c->roll_servo_gain * u_roll;
-        sy = c->servo_trim_norm[1] + c->pitch_servo_gain * u_pitch;
+        sx = c->servo_trim_norm[0] + c->roll_servo_gain * servo_roll_cmd;
+        sy = c->servo_trim_norm[1] + c->pitch_servo_gain * servo_pitch_cmd;
         out->servo_norm[0] = ac_clampf(sx, c->servo_min_norm, c->servo_max_norm);
         out->servo_norm[1] = ac_clampf(sy, c->servo_min_norm, c->servo_max_norm);
     }
