@@ -6,6 +6,8 @@
 #ifndef __ATTITUDE_H__
 #define __ATTITUDE_H__
 
+#include "Driver/IMU/IMU_interface.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,6 +27,17 @@ typedef enum {
  * @return 0 成功，-1 参数无效
  */
 int Attitude_RequestImuCali(int imu, float time_s, float thresh);
+
+/**
+ * @brief 姿态应用层初始化：上电加载并应用 Flash 中保存的 IMU 陀螺偏置。
+ */
+void Attitude_Init(void);
+
+/**
+ * @brief 供 IMU 采样任务喂入本周期原始数据（用于校准采样窗口统计）。
+ */
+void Attitude_OnImuSample(const IMU_Data_t *imu1, int imu1_valid,
+                          const IMU_Data_t *imu2, int imu2_valid);
 
 /**
  * @brief 姿态解算任务：应在定时器回调中周期调用（如 100Hz）。

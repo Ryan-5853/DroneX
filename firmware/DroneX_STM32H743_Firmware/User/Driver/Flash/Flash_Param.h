@@ -20,7 +20,7 @@ extern "C" {
 #define FLASH_PARAM_END_ADDR    (0x081FFFFFUL)
 
 /** Flash 中存储的布局版本；修改 ParamFlash_Data_t 后请 +1 */
-#define FLASH_PARAM_LAYOUT_VER  (1U)
+#define FLASH_PARAM_LAYOUT_VER  (2U)
 
 /**
  * @brief 从 Flash 读取校验后的参数块，覆盖 *out。

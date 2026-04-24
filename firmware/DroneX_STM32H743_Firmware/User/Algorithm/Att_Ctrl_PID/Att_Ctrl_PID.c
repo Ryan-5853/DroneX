@@ -1,6 +1,6 @@
 /**
  * @file Att_Ctrl_PID.c
- * @brief 垂起姿态 PID：偏航差速油门 + 舵机滚俯。
+ * @brief 倒立摆飞行器两轴姿态位置式 PID：roll/pitch 独立控制 X/Y 舵机。
  */
 
 #include "Algorithm/Att_Ctrl_PID/Att_Ctrl_PID.h"
@@ -16,7 +16,6 @@ typedef struct {
     Att_Ctrl_PID_Config_t cfg;
     PID_t pid_roll;
     PID_t pid_pitch;
-    PID_t pid_yaw;
 } Att_Ctrl_PID_State_t;
 
 static Att_Ctrl_PID_State_t s_ac;
@@ -68,19 +67,13 @@ static int pid_apply_limits(PID_t *pid, float out_min, float out_max,
 static int validate_cfg(const Att_Ctrl_PID_Config_t *c)
 {
     if (c->roll_out_min > c->roll_out_max || c->pitch_out_min > c->pitch_out_max
-        || c->yaw_out_min > c->yaw_out_max) {
-        return ATT_CTRL_PID_ERR_LIMIT;
-    }
-    if (c->throttle_min > c->throttle_max || c->servo_min_rad > c->servo_max_rad) {
+        || c->servo_min_norm > c->servo_max_norm) {
         return ATT_CTRL_PID_ERR_LIMIT;
     }
     if (c->enable_roll_i_limit && c->roll_i_min > c->roll_i_max) {
         return ATT_CTRL_PID_ERR_LIMIT;
     }
     if (c->enable_pitch_i_limit && c->pitch_i_min > c->pitch_i_max) {
-        return ATT_CTRL_PID_ERR_LIMIT;
-    }
-    if (c->enable_yaw_i_limit && c->yaw_i_min > c->yaw_i_max) {
         return ATT_CTRL_PID_ERR_LIMIT;
     }
     return ATT_CTRL_PID_OK;
@@ -109,11 +102,6 @@ int Att_Ctrl_PID_Init(const Att_Ctrl_PID_Config_t *cfg)
     if (rc != PID_OK) {
         return ATT_CTRL_PID_ERR_NULL;
     }
-    rc = PID_Init(&s_ac.pid_yaw, &cfg->gains_yaw);
-    if (rc != PID_OK) {
-        return ATT_CTRL_PID_ERR_NULL;
-    }
-
     rc = pid_apply_limits(&s_ac.pid_roll, cfg->roll_out_min, cfg->roll_out_max,
         cfg->enable_roll_i_limit, cfg->roll_i_min, cfg->roll_i_max);
     if (rc != ATT_CTRL_PID_OK) {
@@ -124,12 +112,6 @@ int Att_Ctrl_PID_Init(const Att_Ctrl_PID_Config_t *cfg)
     if (rc != ATT_CTRL_PID_OK) {
         return rc;
     }
-    rc = pid_apply_limits(&s_ac.pid_yaw, cfg->yaw_out_min, cfg->yaw_out_max,
-        cfg->enable_yaw_i_limit, cfg->yaw_i_min, cfg->yaw_i_max);
-    if (rc != ATT_CTRL_PID_OK) {
-        return rc;
-    }
-
     s_ac.valid = 1u;
     return ATT_CTRL_PID_OK;
 }
@@ -141,18 +123,14 @@ void Att_Ctrl_PID_Reset(void)
     }
     PID_Reset(&s_ac.pid_roll);
     PID_Reset(&s_ac.pid_pitch);
-    PID_Reset(&s_ac.pid_yaw);
 }
 
 int Att_Ctrl_PID_Update(const Att_Ctrl_PID_In_t *in, Att_Ctrl_PID_Out_t *out)
 {
     float e_roll;
     float e_pitch;
-    float e_yaw;
     float u_roll;
     float u_pitch;
-    float u_yaw;
-    float t_mid;
     int rc;
 
     if (!s_ac.valid || in == NULL || out == NULL) {
@@ -161,7 +139,6 @@ int Att_Ctrl_PID_Update(const Att_Ctrl_PID_In_t *in, Att_Ctrl_PID_Out_t *out)
 
     e_roll = angle_err_rad(in->roll_sp_rad, in->roll_rad);
     e_pitch = angle_err_rad(in->pitch_sp_rad, in->pitch_rad);
-    e_yaw = angle_err_rad(in->yaw_sp_rad, in->yaw_rad);
 
     rc = PID_Update(&s_ac.pid_roll, e_roll, in->time_us, &u_roll);
     if (rc != PID_OK) {
@@ -171,30 +148,15 @@ int Att_Ctrl_PID_Update(const Att_Ctrl_PID_In_t *in, Att_Ctrl_PID_Out_t *out)
     if (rc != PID_OK) {
         return (rc == PID_ERR_TIME) ? ATT_CTRL_PID_ERR_TIME : ATT_CTRL_PID_ERR_NULL;
     }
-    rc = PID_Update(&s_ac.pid_yaw, e_yaw, in->time_us, &u_yaw);
-    if (rc != PID_OK) {
-        return (rc == PID_ERR_TIME) ? ATT_CTRL_PID_ERR_TIME : ATT_CTRL_PID_ERR_NULL;
-    }
-
     {
         const Att_Ctrl_PID_Config_t *c = &s_ac.cfg;
-        float m0;
-        float m1;
-        float s0;
-        float s1;
+        float sx;
+        float sy;
 
-        t_mid = c->base_throttle + c->pitch_throttle_common * u_pitch;
-        m0 = t_mid + c->yaw_throttle_diff * u_yaw;
-        m1 = t_mid - c->yaw_throttle_diff * u_yaw;
-        out->throttle_motor[0] = ac_clampf(m0, c->throttle_min, c->throttle_max);
-        out->throttle_motor[1] = ac_clampf(m1, c->throttle_min, c->throttle_max);
-
-        s0 = c->servo_trim_rad[0] + c->pitch_servo_common * u_pitch
-            + c->roll_servo_diff * u_roll;
-        s1 = c->servo_trim_rad[1] + c->pitch_servo_common * u_pitch
-            - c->roll_servo_diff * u_roll;
-        out->servo_rad[0] = ac_clampf(s0, c->servo_min_rad, c->servo_max_rad);
-        out->servo_rad[1] = ac_clampf(s1, c->servo_min_rad, c->servo_max_rad);
+        sx = c->servo_trim_norm[0] + c->roll_servo_gain * u_roll;
+        sy = c->servo_trim_norm[1] + c->pitch_servo_gain * u_pitch;
+        out->servo_norm[0] = ac_clampf(sx, c->servo_min_norm, c->servo_max_norm);
+        out->servo_norm[1] = ac_clampf(sy, c->servo_min_norm, c->servo_max_norm);
     }
 
     return ATT_CTRL_PID_OK;

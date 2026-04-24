@@ -51,9 +51,12 @@ static void Cmd_Reset(const char *cmd, const Cmd_Param_t *params, int n)
     (void)cmd;
     (void)params;
     (void)n;
-    Debug_Printf("OK reset\r\n");
-    HAL_Delay(50);  /* 等待串口输出完成 */
-    HAL_NVIC_SystemReset();
+    Debug_BlockingPrintf("OK reset\r\n");
+    __DSB();
+    __ISB();
+    NVIC_SystemReset();
+    while (1) {
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -63,10 +66,12 @@ static void Cmd_ImuCali(const char *cmd, const Cmd_Param_t *params, int n)
 {
     (void)cmd;
     const char *imu_s = Cmd_GetParam(params, n, "imu");
-    const char *time_s = Cmd_GetParam(params, n, "time");
     const char *thresh_s = Cmd_GetParam(params, n, "thresh");
-    if (!imu_s || !time_s || !thresh_s) {
-        Debug_Printf("ERR imu_cali need imu,time,thresh\r\n");
+    float t = 5.0f;
+    float th = 0.0f;
+
+    if (!imu_s) {
+        Debug_Printf("ERR imu_cali need imu\r\n");
         return;
     }
     int imu = 0;
@@ -77,16 +82,15 @@ static void Cmd_ImuCali(const char *cmd, const Cmd_Param_t *params, int n)
         Debug_Printf("ERR imu=1|2|0|both\r\n");
         return;
     }
-    float t = 0.f, th = 0.f;
-    if (sscanf(time_s, "%f", &t) != 1 || sscanf(thresh_s, "%f", &th) != 1) {
-        Debug_Printf("ERR time,thresh must be number\r\n");
+    if (thresh_s && (sscanf(thresh_s, "%f", &th) != 1)) {
+        Debug_Printf("ERR thresh must be number\r\n");
         return;
     }
     if (Attitude_RequestImuCali(imu, t, th) != 0) {
-        Debug_Printf("ERR imu_cali param invalid\r\n");
+        Debug_Printf("ERR imu_cali busy or invalid\r\n");
         return;
     }
-    Debug_Printf("OK imu_cali queued\r\n");
+    Debug_Printf("OK imu_cali queued (auto 5s)\r\n");
 }
 
 /**

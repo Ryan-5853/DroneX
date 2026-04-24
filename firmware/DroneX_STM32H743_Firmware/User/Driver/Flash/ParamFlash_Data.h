@@ -18,7 +18,9 @@ extern "C" {
 typedef struct
 {
     uint32_t flags;
-    uint32_t reserved_u32[7];
+    float imu1_gyro_bias[3];
+    float imu2_gyro_bias[3];
+    uint32_t reserved_u32[1];
     /* 在此添加 float/int/数组等；保持自然对齐；改结构后递增 Flash_Param 布局版本 */
 } ParamFlash_Data_t;
 

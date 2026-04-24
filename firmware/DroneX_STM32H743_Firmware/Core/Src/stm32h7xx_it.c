@@ -89,7 +89,12 @@ void NMI_Handler(void)
 void HardFault_Handler(void)
 {
   /* USER CODE BEGIN HardFault_IRQn 0 */
-  Debug_PanicPrintf("[PANIC] HardFault\r\n");
+  Debug_PanicPrintf("[PANIC] HardFault HFSR=0x%08lx CFSR=0x%08lx MMFAR=0x%08lx BFAR=0x%08lx SHCSR=0x%08lx\r\n",
+                   (unsigned long)SCB->HFSR,
+                   (unsigned long)SCB->CFSR,
+                   (unsigned long)SCB->MMFAR,
+                   (unsigned long)SCB->BFAR,
+                   (unsigned long)SCB->SHCSR);
 
   /* USER CODE END HardFault_IRQn 0 */
   while (1)
@@ -105,7 +110,10 @@ void HardFault_Handler(void)
 void MemManage_Handler(void)
 {
   /* USER CODE BEGIN MemoryManagement_IRQn 0 */
-  Debug_PanicPrintf("[PANIC] MemManage\r\n");
+  Debug_PanicPrintf("[PANIC] MemManage CFSR=0x%08lx MMFAR=0x%08lx SHCSR=0x%08lx\r\n",
+                   (unsigned long)SCB->CFSR,
+                   (unsigned long)SCB->MMFAR,
+                   (unsigned long)SCB->SHCSR);
 
   /* USER CODE END MemoryManagement_IRQn 0 */
   while (1)
@@ -121,7 +129,10 @@ void MemManage_Handler(void)
 void BusFault_Handler(void)
 {
   /* USER CODE BEGIN BusFault_IRQn 0 */
-  Debug_PanicPrintf("[PANIC] BusFault\r\n");
+  Debug_PanicPrintf("[PANIC] BusFault CFSR=0x%08lx BFAR=0x%08lx SHCSR=0x%08lx\r\n",
+                   (unsigned long)SCB->CFSR,
+                   (unsigned long)SCB->BFAR,
+                   (unsigned long)SCB->SHCSR);
 
   /* USER CODE END BusFault_IRQn 0 */
   while (1)
@@ -137,7 +148,9 @@ void BusFault_Handler(void)
 void UsageFault_Handler(void)
 {
   /* USER CODE BEGIN UsageFault_IRQn 0 */
-  Debug_PanicPrintf("[PANIC] UsageFault\r\n");
+  Debug_PanicPrintf("[PANIC] UsageFault CFSR=0x%08lx SHCSR=0x%08lx\r\n",
+                   (unsigned long)SCB->CFSR,
+                   (unsigned long)SCB->SHCSR);
 
   /* USER CODE END UsageFault_IRQn 0 */
   while (1)

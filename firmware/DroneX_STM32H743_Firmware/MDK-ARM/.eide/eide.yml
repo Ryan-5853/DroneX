@@ -158,6 +158,8 @@ targets:
       - <virtual_root>/Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_timebase_rtc_alarm_template.c
       - <virtual_root>/Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_timebase_rtc_wakeup_template.c
       - <virtual_root>/Drivers/STM32H7xx_HAL_Driver/stm32h7xx_hal_timebase_tim_template.c
+    settings:
+      debugger: cortex-debug
     toolchain: AC5
     toolchainConfigMap:
       AC5:

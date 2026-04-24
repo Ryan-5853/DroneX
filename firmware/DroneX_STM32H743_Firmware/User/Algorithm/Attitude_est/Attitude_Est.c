@@ -32,6 +32,10 @@ static struct {
     float acc[3];         /* 融合后加速度 [m/s²] */
     IMU_Bias_t bias1;    /* IMU1 偏置 */
     IMU_Bias_t bias2;    /* IMU2 偏置 */
+    IMU_Data_t imu1_body; /* IMU1 after bias correction and frame transform */
+    IMU_Data_t imu2_body; /* IMU2 after bias correction and frame transform */
+    uint8_t imu1_body_valid;
+    uint8_t imu2_body_valid;
     uint8_t ready;        /* 是否已至少完成一次有效解算 */
 } s_est;
 
@@ -77,6 +81,10 @@ void Attitude_Est_Update(const IMU_Data_t *imu1, const IMU_Data_t *imu2, float d
         acc1_body[0] = -acc1_body[0];
         acc1_body[1] = -acc1_body[1];
         acc1_body[2] = -acc1_body[2];
+        memcpy(s_est.imu1_body.gyro, gyro1_body, sizeof(gyro1_body));
+        memcpy(s_est.imu1_body.accel, acc1_body, sizeof(acc1_body));
+        s_est.imu1_body.temperature = imu1->temperature;
+        s_est.imu1_body_valid = 1U;
     }
 
     /* 2. 处理 IMU2（若有） */
@@ -97,6 +105,10 @@ void Attitude_Est_Update(const IMU_Data_t *imu1, const IMU_Data_t *imu2, float d
         acc2_body[0] = -acc2_body[0];
         acc2_body[1] = -acc2_body[1];
         acc2_body[2] = -acc2_body[2];
+        memcpy(s_est.imu2_body.gyro, gyro2_body, sizeof(gyro2_body));
+        memcpy(s_est.imu2_body.accel, acc2_body, sizeof(acc2_body));
+        s_est.imu2_body.temperature = imu2->temperature;
+        s_est.imu2_body_valid = 1U;
 
         if (imu1 != NULL) {
             float w1 = ATTITUDE_EST_FUSION_WEIGHT_IMU1;
@@ -128,9 +140,13 @@ void Attitude_Est_Update(const IMU_Data_t *imu1, const IMU_Data_t *imu2, float d
             ax /= anorm;
             ay /= anorm;
             az /= anorm;
-            /* 期望重力 [0,0,-1] 在主板系：v = R*[0,0,-1] = [-R02,-R12,-R22] */
-            float vx = -2.0f * (q[1] * q[3] + q[0] * q[2]);
-            float vy = -2.0f * (q[2] * q[3] - q[0] * q[1]);
+            /*
+             * q is integrated as body->world (q_dot = 0.5 * q * omega_body).
+             * The accelerometer measures gravity in the body frame, so predict it
+             * with R^T * [0, 0, -1], not R * [0, 0, -1].
+             */
+            float vx = -2.0f * (q[1] * q[3] - q[0] * q[2]);
+            float vy = -2.0f * (q[2] * q[3] + q[0] * q[1]);
             float vz = 2.0f * (q[1] * q[1] + q[2] * q[2]) - 1.0f;
             /* 误差 = 测量 × 估计（叉积，修正轴） */
             float ex = ay * vz - az * vy;
@@ -170,6 +186,9 @@ void Attitude_Est_GetQuat(float q[4])
 void Attitude_Est_GetEuler(float *roll_rad, float *pitch_rad, float *yaw_rad)
 {
     float qw = s_est.q[0], qx = s_est.q[1], qy = s_est.q[2], qz = s_est.q[3];
+    float roll_raw;
+    float pitch_raw;
+    float yaw_raw;
     /* 四元数 → 旋转矩阵 R，按 ZXY(yaw-pitch-roll) 提取：R=Ry(roll)*Rx(pitch)*Rz(yaw) */
     float R02 = 2.0f * (qx * qz + qw * qy);
     float R22 = 1.0f - 2.0f * (qx * qx + qy * qy);
@@ -177,9 +196,14 @@ void Attitude_Est_GetEuler(float *roll_rad, float *pitch_rad, float *yaw_rad)
     float R10 = 2.0f * (qx * qy + qw * qz);
     float R11 = 1.0f - 2.0f * (qx * qx + qz * qz);
 
-    if (roll_rad)  *roll_rad  = atan2f(R02, R22);
-    if (pitch_rad) *pitch_rad = (fabsf(R12) >= 1.0f) ? copysignf(1.5707963267949f, R12) : asinf(-R12);
-    if (yaw_rad)   *yaw_rad   = atan2f(R10, R11);
+    roll_raw = atan2f(R02, R22);
+    pitch_raw = (fabsf(R12) >= 1.0f) ? copysignf(1.5707963267949f, R12) : asinf(-R12);
+    yaw_raw = atan2f(R10, R11);
+
+    /* 统一系统定义：roll/pitch 方向与机体系标准一致（符号反向），yaw 保持不变。 */
+    if (roll_rad)  *roll_rad  = roll_raw;
+    if (pitch_rad) *pitch_rad = pitch_raw;
+    if (yaw_rad)   *yaw_rad   = yaw_raw;
 }
 
 void Attitude_Est_GetAngularRate(float omega[3])
@@ -190,6 +214,23 @@ void Attitude_Est_GetAngularRate(float omega[3])
 void Attitude_Est_GetAccel(float acc[3])
 {
     if (acc) memcpy(acc, s_est.acc, 3 * sizeof(float));
+}
+
+int Attitude_Est_GetImuBodyData(int imu_id, IMU_Data_t *data)
+{
+    if (data == NULL) return ATTITUDE_EST_ERR_PARAM;
+
+    if (imu_id == ATTITUDE_EST_IMU_1) {
+        if (s_est.imu1_body_valid == 0U) return ATTITUDE_EST_ERR_NOT_READY;
+        memcpy(data, &s_est.imu1_body, sizeof(IMU_Data_t));
+        return ATTITUDE_EST_OK;
+    }
+    if (imu_id == ATTITUDE_EST_IMU_2) {
+        if (s_est.imu2_body_valid == 0U) return ATTITUDE_EST_ERR_NOT_READY;
+        memcpy(data, &s_est.imu2_body, sizeof(IMU_Data_t));
+        return ATTITUDE_EST_OK;
+    }
+    return ATTITUDE_EST_ERR_PARAM;
 }
 
 int Attitude_Est_SetBias(int imu_id, const IMU_Bias_t *bias)

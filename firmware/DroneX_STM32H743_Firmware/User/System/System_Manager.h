@@ -28,6 +28,11 @@ void System_Manager_Tick10ms(void);
 void System_Manager_Tick100ms(void);
 
 /**
+ * @brief 动力指令转发任务（建议由 DShot 定时中断周期调用）。
+ */
+void System_Manager_PowerControlTask(void);
+
+/**
  * @brief 读取系统状态快照。
  */
 const System_State_t *System_Manager_GetState(void);

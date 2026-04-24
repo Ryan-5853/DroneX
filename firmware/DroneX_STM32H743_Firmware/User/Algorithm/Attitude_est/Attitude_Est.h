@@ -40,7 +40,7 @@ void Attitude_Est_Update(const IMU_Data_t *imu1, const IMU_Data_t *imu2, float d
 void Attitude_Est_GetQuat(float q[4]);
 
 /**
- * @brief 获取欧拉角 [rad]，主板系：yaw 绕 Z，pitch 绕 X，roll 绕 Y。
+ * @brief 获取欧拉角 [rad]，已按系统标准定义完成后处理（可直接使用）。
  * @param roll_rad  滚转角 [rad]，绕 Y 轴
  * @param pitch_rad 俯仰角 [rad]，绕 X 轴
  * @param yaw_rad   偏航角 [rad]，绕 Z 轴
@@ -58,6 +58,14 @@ void Attitude_Est_GetAngularRate(float omega[3]);
  * @param acc 输出 [ax, ay, az]
  */
 void Attitude_Est_GetAccel(float acc[3]);
+
+/**
+ * @brief 获取单个 IMU 经过偏置修正和参考系变换后的六轴数据。
+ * @param imu_id ATTITUDE_EST_IMU_1 或 ATTITUDE_EST_IMU_2
+ * @param data   输出主板系数据：gyro [rad/s]，accel [m/s^2]
+ * @return 0 成功，负数表示参数无效或该 IMU 尚无有效数据
+ */
+int Attitude_Est_GetImuBodyData(int imu_id, IMU_Data_t *data);
 
 /* ----------------------------------------------------------------------------
  * 校准与偏置
